@@ -172,6 +172,18 @@ CREATE TABLE IF NOT EXISTS run_sessions (
   metadata_json TEXT
 );
 
+CREATE TABLE IF NOT EXISTS run_auth_tokens (
+  token_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  status TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT,
+  metadata_json TEXT
+);
+
 CREATE TABLE IF NOT EXISTS codex_devices (
   device_id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -247,6 +259,12 @@ ON run_sessions(run_id);
 
 CREATE INDEX IF NOT EXISTS idx_run_sessions_expires
 ON run_sessions(expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_run_auth_tokens_hash
+ON run_auth_tokens(token_hash, status);
+
+CREATE INDEX IF NOT EXISTS idx_run_auth_tokens_run
+ON run_auth_tokens(run_id);
 """
 
 

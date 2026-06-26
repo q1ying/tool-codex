@@ -95,6 +95,16 @@ class StorageService:
             ExpiresIn=self.settings.object_storage_presign_expires_seconds,
         )
 
+    def presign_upload(self, object_key: str, content_type: str | None = None) -> str:
+        params = {"Bucket": self.bucket, "Key": object_key}
+        if content_type:
+            params["ContentType"] = content_type
+        return self.client.generate_presigned_url(
+            "put_object",
+            Params=params,
+            ExpiresIn=self.settings.object_storage_presign_expires_seconds,
+        )
+
     def _ensure_bucket(self) -> None:
         try:
             self.client.head_bucket(Bucket=self.bucket)

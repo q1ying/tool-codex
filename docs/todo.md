@@ -16,29 +16,33 @@ docs/architecture-data-plane.md
 
 ## 下一阶段：OSS signed URL 数据面
 
-优先实现：
+已完成基础项：
 
-1. `StorageService.presign_upload()`。
-2. run-scoped 下载授权接口：
+- `StorageService.presign_upload()`。
+- run-scoped 下载授权接口：
 
 ```text
 POST /api/runs/{run_id}/assets/{asset_id}/download-url
 ```
 
-3. run-scoped 上传授权接口：
+- run-scoped 上传授权接口：
 
 ```text
 POST /api/runs/{run_id}/artifacts/upload-url
 ```
 
-4. artifact 完成登记接口：
+已完成 artifact 完成登记接口：
 
 ```text
 POST /api/runs/{run_id}/artifacts/complete
 ```
 
-5. 对 URL 发放、下载、上传、complete 做审计记录。
-6. 如果 SQLite 本地旧数据冲突，直接清理 `data/` 后重跑，不做隐藏兼容。
+它会校验 object_key 作用域、size、sha256，并登记 `assets`、`file_assets`、`run_assets`、`asset_lineage` 和事件。
+
+仍待实现：
+
+1. 更完整的前端展示和下载入口。
+2. 如果 SQLite 本地旧数据冲突，直接清理 `data/` 后重跑，不做隐藏兼容。
 
 ## 下一阶段：候选资产 manifest
 
@@ -51,16 +55,63 @@ POST /api/runs/{run_id}/artifacts/complete
 
 ## 下一阶段：Codex 资产工具
 
-先用简单 helper 或 HTTP endpoint 跑通，再接 MCP：
+基础 HTTP MCP endpoint 已放在：
 
-- `search_assets(query)`
-- `get_asset_summary(asset_id)`
-- `read_asset_chunk(asset_id, chunk_id)`
-- `download_asset(asset_id)`
-- `upload_artifact(path, role)`
+```text
+apps/api/src/gateway/mcp/
+```
+
+地址：
+
+```text
+http://主服务器IP:8010/mcp
+```
+
+本服务器的局域网 IP 通过项目根目录 `.env` 的 `ASSET_MCP_URL` 配置，例如：
+
+```env
+ASSET_MCP_URL=http://192.168.110.73:8010/mcp
+```
+
+当前工具：
+
+- `list_tools`
+- `get_run_context`
+- `list_candidate_assets`
+- `list_conversation_assets`
+- `search_assets`
+- `get_asset_summary`
+- `read_asset_chunk`
+- `get_asset_download_url`
+- `get_artifact_upload_url`
+- `complete_artifact`
 - `report_progress(status)`
 
 Codex 只能拿到 run-scoped 工具和 signed URL，不能拿对象存储长期凭据。
+
+后续再补：
+
+- 真正的 chunk 生成流水线；当前 `read_asset_chunk` 是按对象字节块读取，适合文本和已抽取文本，不适合直接理解二进制 Word/PDF。
+- 更强的搜索排序；当前 `search_assets` 是 filename、summary、metadata、kind、role 的关键词匹配。
+
+## MCP Token 后续安全事项
+
+当前 `/mcp` 使用 run-scoped bearer token，目的是让同一个 MCP 地址可以服务多次 run，但每次 run 只能访问自己的候选资产和所属 conversation 范围内的资产。
+
+已实现：
+
+- 创建 run 时生成 token。
+- `run_auth_tokens` 表保存 token hash。
+- `/mcp` 校验 bearer token、状态和过期时间。
+- 默认有效期 24 小时。
+
+仍待实现：
+
+- 不再把明文 token 长期写入 `codex_runs.metadata_json` / `command_json`。
+- 增加 token rotate / revoke 接口。
+- 增加过期 token 清理任务。
+- 增加开发模式开关，例如 `ALLOW_INSECURE_MCP=true`，方便本机临时测试不带 token。
+- 生产/多用户场景缩短默认 token TTL。
 
 ## 下一阶段：直接上传输出
 

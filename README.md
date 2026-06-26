@@ -69,6 +69,12 @@ Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/api/health
 - `GET /api/conversations/{conversation_id}/events`
 - `POST /api/conversations/run`
 - `GET /api/assets/{asset_id}`
+- `GET /api/runs/{run_id}/asset-candidates`
+- `POST /api/runs/{run_id}/assets/search`
+- `GET /api/runs/{run_id}/assets/{asset_id}/chunks/{chunk_index}`
+- `POST /api/runs/{run_id}/assets/{asset_id}/download-url`
+- `POST /api/runs/{run_id}/artifacts/upload-url`
+- `POST /api/runs/{run_id}/artifacts/complete`
 - `GET /api/files/{file_id}/download`
 - `GET /api/devices`
 - `POST /api/devices`
@@ -168,12 +174,72 @@ pip install paramiko
 POST /api/devices/{device_id}/health-check
 ```
 
+## Asset MCP
+
+Gateway 暴露 run-scoped asset MCP endpoint：
+
+```text
+http://主服务器IP:8010/mcp
+```
+
+本服务器的局域网 IP 写在项目根目录 `.env` 里的 `ASSET_MCP_URL`。后端创建 run 时会把这个地址写进本次 `codex exec -c` 的临时 MCP 配置：
+
+```text
+ASSET_MCP_URL=http://主服务器IP:8010/mcp
+```
+
+例如你的主服务器 IP 是 `192.168.110.73`，就在 `.env` 改成：
+
+```env
+ASSET_MCP_URL=http://192.168.110.73:8010/mcp
+```
+
+每个 run 创建时会生成一个 `ASSET_MCP_TOKEN`。不要用 `codex mcp add` 做每次任务配置，因为它会写入远端 Codex 的持久配置。当前 runner 会在本次 `codex exec` 命令中用 `-c` 临时注入 MCP 配置，并配合 `--ephemeral` 和 `--ignore-user-config` 隔离全局配置。
+
+等价命令形态：
+
+```bash
+ASSET_MCP_TOKEN="run_xxx_token" codex exec \
+  --ephemeral \
+  --ignore-user-config \
+  --sandbox workspace-write \
+  -C /path/to/workspace \
+  -c 'mcp.remote_mcp_client_enabled=true' \
+  -c 'mcp_servers.asset.url="http://主服务器IP:8010/mcp"' \
+  -c 'mcp_servers.asset.bearer_token_env_var="ASSET_MCP_TOKEN"' \
+  -c 'mcp_servers.asset.required=true' \
+  -c 'mcp_servers.asset.enabled_tools=["list_candidate_assets","search_assets","get_asset_download_url"]' \
+  -
+```
+
+当前工具包括：
+
+- `list_tools`
+- `get_run_context`
+- `list_candidate_assets`
+- `list_conversation_assets`
+- `search_assets`
+- `get_asset_summary`
+- `read_asset_chunk`
+- `get_asset_download_url`
+- `get_artifact_upload_url`
+- `complete_artifact`
+- `report_progress`
+
+当前 SSH runner 不再通过 SCP/SFTP 同步完整 session workspace，只创建远端空 workspace 和必要目录，并取回最终消息文件。文件数据面后续通过 MCP + signed URL 访问。
+
 ## 测试和排查
 
 运行测试：
 
 ```powershell
 make test
+```
+
+运行全部测试入口；有 Vitest 配置时会跑前端 Vitest，没有则跳过；后端优先跑 pytest，未安装 pytest 时回退到 unittest：
+
+```powershell
+make test-all
 ```
 
 查看 SQLite：

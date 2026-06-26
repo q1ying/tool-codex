@@ -117,6 +117,96 @@ class AssetService:
         self.conn.commit()
         return self.get(asset_id)
 
+    def create_from_object(
+        self,
+        *,
+        owner_user_id: str,
+        scope_type: str,
+        original_filename: str,
+        stored_filename: str,
+        object_key: str,
+        mime_type: str | None,
+        size_bytes: int,
+        sha256: str,
+        project_id: str | None = None,
+        conversation_id: str | None = None,
+        source_message_id: str | None = None,
+        relation_type: str = "generated_output",
+        message_id: str | None = None,
+        run_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        asset_id: str | None = None,
+    ) -> dict[str, Any]:
+        if scope_type not in {"project", "conversation", "run", "system"}:
+            raise ValueError("scope_type must be project, conversation, run, or system.")
+        asset_id = asset_id or short_id("asset")
+        ext = Path(stored_filename).suffix.lower()
+        asset_type = self._asset_type(ext, metadata or {}, relation_type)
+        branch_key = self._normalize_branch_key(str((metadata or {}).get("branch_key") or original_filename))
+        branch = self._ensure_branch(
+            owner_user_id=owner_user_id,
+            project_id=project_id,
+            conversation_id=conversation_id,
+            branch_key=branch_key,
+            asset_type=asset_type,
+        )
+        version_no = self._next_version_no(branch["branch_id"])
+        role = str((metadata or {}).get("role") or self._role_for(relation_type, ext))
+        kind = str((metadata or {}).get("kind") or self._kind_for(relation_type))
+        now = now_iso()
+        status = str((metadata or {}).get("status") or ("candidate" if relation_type == "generated_output" else "ready"))
+        self.conn.execute(
+            """
+            INSERT INTO assets
+            (asset_id, owner_user_id, scope_type, project_id, conversation_id, run_id, source_message_id,
+             original_filename, stored_filename, mime_type, ext, size_bytes, sha256,
+             storage_backend, bucket, object_key, status, created_at, updated_at, metadata_json,
+             branch_id, branch_key, version_no, role, kind)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                asset_id,
+                owner_user_id,
+                scope_type,
+                project_id,
+                conversation_id,
+                run_id,
+                source_message_id,
+                original_filename,
+                stored_filename,
+                mime_type,
+                ext,
+                size_bytes,
+                sha256,
+                self.storage.backend_name,
+                self.storage.bucket,
+                object_key,
+                status,
+                now,
+                now,
+                json.dumps(metadata or {}, ensure_ascii=False),
+                branch["branch_id"],
+                branch_key,
+                version_no,
+                role,
+                kind,
+            ),
+        )
+        if status == "ready":
+            self._update_branch_latest(branch["branch_id"], asset_id, now)
+        self.link(
+            asset_id=asset_id,
+            relation_type=relation_type,
+            project_id=project_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            run_id=run_id,
+            metadata=metadata or {},
+            commit=False,
+        )
+        self.conn.commit()
+        return self.get(asset_id)
+
     def link(
         self,
         *,

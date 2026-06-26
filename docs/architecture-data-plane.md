@@ -173,6 +173,56 @@ Gateway 应该暴露两类能力。
 
 MCP server 可以直接由 gateway process 提供，也可以先做一个小 sidecar 调 gateway API。关键边界是：Codex 拿到的是 scoped tools 和 signed URL，不是对象存储长期凭据。
 
+## Run Token 设计
+
+`/mcp` 暴露在主服务器 HTTP 端口上后，同一局域网内的其他机器也可能访问到它。MCP 工具又能列出资产、生成对象存储临时下载 URL、生成上传 URL、登记输出 artifact，所以不能只靠“知道地址的人才会调用”作为边界。
+
+当前设计使用 run-scoped bearer token：
+
+```text
+ASSET_MCP_TOKEN -> run_auth_tokens.token_hash -> run_id -> conversation_id/user_id -> allowed assets
+```
+
+不要用 `codex mcp add` 做每次任务配置，因为它会写入远端 Codex 的持久配置。每次自动化 run 应通过 `codex exec -c ...` 临时注入 MCP 配置，并配合 `--ephemeral` 和 `--ignore-user-config` 隔离全局配置。
+
+主服务器的局域网 MCP 地址由项目根目录 `.env` 的 `ASSET_MCP_URL` 控制。例如 `ASSET_MCP_URL=http://192.168.110.73:8010/mcp`；后端创建 run 时会把这个 URL 写入本次 `codex exec -c` 参数。
+
+```bash
+ASSET_MCP_TOKEN="本次run的token" codex exec \
+  --ephemeral \
+  --ignore-user-config \
+  -c 'mcp.remote_mcp_client_enabled=true' \
+  -c 'mcp_servers.asset.url="http://主服务器IP:8010/mcp"' \
+  -c 'mcp_servers.asset.bearer_token_env_var="ASSET_MCP_TOKEN"' \
+  -c 'mcp_servers.asset.required=true' \
+  -c 'mcp_servers.asset.enabled_tools=["list_candidate_assets","search_assets","get_asset_download_url"]' \
+  ...
+```
+
+这样做的目的：
+
+- 防止同一局域网其他机器直接调用 `/mcp` 拿文件下载 URL。
+- 防止一个 run 读取另一个 run / conversation 的文件。
+- 让 MCP 配置只作用于单次 run，不污染 `~/.codex/config.toml`。
+- 让旧 shell、旧任务、旧 token 在过期后失效。
+
+当前已实现：
+
+- 创建 run 时生成 token。
+- 数据库只保存 token hash。
+- `/mcp` 每次请求校验 `Authorization: Bearer ...`。
+- 校验 token 是否存在、状态是否 active、是否过期。
+- token 默认有效期为 24 小时。
+- token 校验成功后只按对应 `run_id` 做资产访问控制。
+
+当前仍需补齐：
+
+- 不应长期把明文 token 写入 `codex_runs.metadata_json` / `command_json`；后续应改为只在创建 run 的响应或一次性读取接口里返回。
+- 增加 token rotate / revoke 接口。
+- 增加过期 token 的定期清理。
+- 增加开发模式开关，例如 `ALLOW_INSECURE_MCP=true`，只在本机调试时允许不带 token。
+- 根据部署模式缩短默认有效期，例如从 24 小时降到 15-60 分钟。
+
 ## 输出登记
 
 长期输出路径要避免把远端 workspace 复制回来。
@@ -218,34 +268,37 @@ MCP server 可以直接由 gateway process 提供，也可以先做一个小 sid
 
 ### 阶段 2：增加 signed URL 基础能力
 
-- 增加 `StorageService.presign_upload()`。
-- 增加 run-scoped download/upload URL endpoints。
+- 已增加 `StorageService.presign_upload()`。
+- 已增加 run-scoped download/upload URL endpoints。
 - 增加 URL 发放和 artifact completion 的审计记录。
 - 只有确实需要时才加 DB 字段；如果本地 SQLite 旧数据冲突，直接清理 `data/` 后重跑。
 
 ### 阶段 3：改变 run manifest
 
-- 用 candidate assets 替代 materialized files。
-- 包含 summary、derivative、chunk、reason 和 allowed operations。
-- 更新 prompt，让 Codex 知道文件是可发现、可按需下载的，不是已经全部在 workspace 里。
+- 已开始用 candidate assets 扩展 materialized files。
+- 已包含 summary、reason、branch、version、role、kind 等候选信息。
+- 已更新 prompt，让 Codex 看到候选资产，并知道可以通过 MCP 工具按需获取更多信息。
+- 后续继续补 derivative、chunk 和 allowed operations。
 
 ### 阶段 4：提供 Codex 资产工具
 
-- MCP 还不稳定时，先用简单 CLI/helper script 跑通。
-- 然后把同样能力暴露成 MCP server：
-  `search_assets`、`get_asset_summary`、`read_asset_chunk`、`download_asset`、`upload_artifact`、`report_progress`。
+- 已增加基础 HTTP MCP endpoint：`/mcp`。
+- 当前实际工具名为：`list_tools`、`get_run_context`、`list_candidate_assets`、`list_conversation_assets`、`get_asset_summary`、`get_asset_download_url`、`get_artifact_upload_url`、`report_progress`。
+- 已补 `search_assets`、`read_asset_chunk`、artifact complete 和 direct output registration 的第一版。
+- `read_asset_chunk` 当前是按对象字节块读取；真正面向 Word/PDF/Excel 的 chunk 仍需要后续派生物流水线。
 - 只给 gateway run 配置这些 MCP server。
 
 ### 阶段 5：直接上传输出
 
 - 让 Codex 直接上传生成 artifacts 到 OSS。
-- 通过 artifact completion API 登记输出。
+- 已通过 artifact completion API 登记输出。
 - 停止下载完整远端 workspace。
 - 只保留下载 `final.md`，或者让 Codex 通过 report/artifact API 回传最终消息。
 
 ### 阶段 6：移除远程 workspace sync
 
-- 从正常 SSH runner 中移除 SCP/SFTP 上传和下载。
+- 已从正常 SSH runner 中移除完整 session workspace 的 SCP/SFTP 上传和下载。
+- 当前仍保留远端目录创建和 `final.md` 单文件取回。
 - 远端 cleanup 只清理 scratch/control 目录。
 - 删除假设 full workspace sync 的旧 prompt 和文档。
 - 更新测试，覆盖 run manifest authorization、signed URL 发放和输出登记。

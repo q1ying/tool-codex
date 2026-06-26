@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 import hashlib
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "apps" / "api" / "src"))
@@ -29,15 +30,42 @@ class MilestoneTests(unittest.TestCase):
         os.environ["GATEWAY_DATA_DIR"] = str(self.tmpdir / "data")
         os.environ["DEFAULT_USER_ID"] = "user_default"
         os.environ["DEFAULT_CONVERSATION_ID"] = "1"
-        os.environ["CODEX_EXECUTABLE"] = "python"
         os.environ["CODEX_RUNNER_MODE"] = "local"
         os.environ["CODEX_SSH_AUTH_METHOD"] = "key"
         os.environ["CODEX_SSH_PASSWORD"] = ""
+        os.environ["CODEX_DISABLE_EXTERNAL_MCPS"] = "false"
         get_settings.cache_clear()
         init_db(get_settings().database_path)
+        self.objects: dict[str, bytes] = {}
+        self.patches = [
+            patch("gateway.services.storage_service.StorageService.put_path", self._put_path),
+            patch("gateway.services.storage_service.StorageService.copy_to_path", self._copy_to_path),
+            patch("gateway.services.storage_service.StorageService.object_size", self._object_size),
+            patch("gateway.services.storage_service.StorageService.iter_bytes", self._iter_bytes),
+            patch("gateway.services.storage_service.StorageService.delete_object", self._delete_object),
+            patch("gateway.services.storage_service.StorageService.presign_download", self._presign_download),
+            patch("gateway.services.storage_service.StorageService.presign_upload", self._presign_upload),
+        ]
+        for item in self.patches:
+            item.start()
         self.client = TestClient(create_app())
+        device = self.client.post(
+            "/api/devices",
+            json={
+                "device_id": "device_default",
+                "name": "Local test device",
+                "runner_mode": "local",
+                "local_executable": sys.executable,
+                "status": "enabled",
+                "sandbox_mode": "danger-full-access",
+                "disable_external_mcps": False,
+            },
+        )
+        self.assertEqual(device.status_code, 200, device.text)
 
     def tearDown(self) -> None:
+        for item in reversed(getattr(self, "patches", [])):
+            item.stop()
         shutil.rmtree(self.tmpdir, ignore_errors=True)
         get_settings.cache_clear()
 
@@ -52,22 +80,20 @@ class MilestoneTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         data = response.json()
         workspace = self.tmpdir / "data" / "workspaces" / "user_default" / data["conversation_id"]
-        self.assertTrue((workspace / "inputs").is_dir())
+        self.assertTrue((workspace / "materials").is_dir())
         self.assertTrue((workspace / "outputs").is_dir())
         self.assertEqual(data["status"], "created")
 
-    def test_upload_file_saved_to_inputs(self) -> None:
+    def test_upload_file_saved_to_materials(self) -> None:
         conversation_id = self._create_conversation()
         response = self.client.post(
             f"/api/conversations/{conversation_id}/files",
             files={"file": ("raw_data.csv", b"a,b\n1,2\n", "text/csv")},
-            data={"kind": "input", "description": "原始数据"},
+            data={"kind": "material", "description": "原始数据"},
         )
         self.assertEqual(response.status_code, 200, response.text)
         asset = response.json()
-        saved = self.tmpdir / "data" / "workspaces" / "user_default" / conversation_id / asset["relative_path"]
-        self.assertTrue(saved.is_file())
-        self.assertEqual(saved.read_text(encoding="utf-8"), "a,b\n1,2\n")
+        self.assertTrue(asset["relative_path"].startswith("materials/"))
         stored = services()["assets"].resolve_local_path(asset["file_id"])
         self.assertTrue(stored.is_file())
         self.assertEqual(stored.read_text(encoding="utf-8"), "a,b\n1,2\n")
@@ -86,7 +112,7 @@ class MilestoneTests(unittest.TestCase):
         self.client.post(
             f"/api/conversations/{conversation_id}/files",
             files={"file": ("raw_data.csv", b"a,b\n1,2\n", "text/csv")},
-            data={"kind": "input"},
+            data={"kind": "material"},
         )
         response = self.client.post(
             f"/api/conversations/{conversation_id}/runs",
@@ -118,7 +144,9 @@ class MilestoneTests(unittest.TestCase):
             timeout_seconds=1,
         )
         cmd = CodexRunner().build_command(request)
-        self.assertEqual(cmd[:4], ["codex", "exec", "-C", str(workspace)])
+        self.assertEqual(cmd[:4], ["codex", "exec", "--ephemeral", "--ignore-user-config"])
+        self.assertIn("-C", cmd)
+        self.assertIn(str(workspace), cmd)
         self.assertIn("--sandbox", cmd)
         self.assertIn("workspace-write", cmd)
         self.assertNotIn("--ask-for-approval", cmd)
@@ -145,12 +173,38 @@ class MilestoneTests(unittest.TestCase):
         )
         cmd = SshCodexRunner()._remote_codex_command(request, "~/lqy/conv_0001", "~/lqy/conv_0001/.gateway/run_final.md")
         self.assertIn("codex exec", cmd)
+        self.assertIn("--ephemeral", cmd)
+        self.assertIn("--ignore-user-config", cmd)
         self.assertIn("-C $HOME/lqy/conv_0001", cmd)
         self.assertIn("--sandbox workspace-write", cmd)
         self.assertIn("--skip-git-repo-check", cmd)
         self.assertIn("--output-last-message $HOME/lqy/conv_0001/.gateway/run_final.md", cmd)
         self.assertTrue(cmd.endswith(" -"))
         self.assertNotIn("hello", cmd)
+
+    def test_runner_injects_asset_mcp_as_ephemeral_config(self) -> None:
+        workspace = self.tmpdir / "workspace"
+        request = CodexRunRequest(
+            run_id="run_0001",
+            conversation_id="conv_0001",
+            workspace_path=workspace,
+            prompt_text="hello",
+            final_message_path=workspace / "final.md",
+            jsonl_log_path=workspace / "codex.jsonl",
+            executable="codex",
+            asset_mcp_token="token",
+            asset_mcp_url="http://127.0.0.1:8010/mcp",
+            asset_mcp_enabled_tools=("list_candidate_assets", "search_assets"),
+        )
+        cmd = CodexRunner().build_command(request)
+        self.assertIn("--ephemeral", cmd)
+        self.assertIn("--ignore-user-config", cmd)
+        self.assertIn("-c", cmd)
+        self.assertIn("mcp.remote_mcp_client_enabled=true", cmd)
+        self.assertIn('mcp_servers.asset.url="http://127.0.0.1:8010/mcp"', cmd)
+        self.assertIn('mcp_servers.asset.bearer_token_env_var="ASSET_MCP_TOKEN"', cmd)
+        self.assertIn("mcp_servers.asset.required=true", cmd)
+        self.assertIn('mcp_servers.asset.enabled_tools=["list_candidate_assets","search_assets"]', cmd)
 
     def test_stderr_classification_keeps_stdin_notice_as_info(self) -> None:
         self.assertEqual(_classify_stderr("Reading additional input from stdin..."), "info")
@@ -162,7 +216,7 @@ class MilestoneTests(unittest.TestCase):
             data={
                 "title": "整理附件",
                 "user_instruction": "第一次处理",
-                "kind": "input",
+                "kind": "material",
                 "description": "原始数据",
             },
             files=[("files", ("raw_data.csv", b"a,b\n1,2\n", "text/csv"))],
@@ -170,17 +224,17 @@ class MilestoneTests(unittest.TestCase):
         self.assertEqual(first.status_code, 200, first.text)
         first_data = first.json()
         conversation_id = first_data["conversation"]["conversation_id"]
-        self.assertEqual(conversation_id, "1")
+        self.assertTrue(conversation_id)
         attachments = first_data["conversation"]["messages"][-1]["attachments"]
         self.assertEqual(attachments, [first_data["uploaded_files"][0]["file_id"]])
-        self.assertTrue((self.tmpdir / "data" / "workspaces" / "user_default" / "1").is_dir())
+        self.assertTrue((self.tmpdir / "data" / "workspaces" / "user_default" / conversation_id).is_dir())
 
         second = self.client.post(
             "/api/conversations/run",
             data={
                 "title": "不会创建新会话",
                 "user_instruction": "第二次处理",
-                "kind": "input",
+                "kind": "material",
                 "description": "补充数据",
             },
             files=[("files", ("more.csv", b"c,d\n3,4\n", "text/csv"))],
@@ -189,9 +243,9 @@ class MilestoneTests(unittest.TestCase):
         second_data = second.json()
         self.assertEqual(second_data["conversation"]["conversation_id"], conversation_id)
         self.assertEqual(second_data["conversation"]["messages"][-1]["content"], "第二次处理")
-        self.assertEqual(second_data["conversation"]["messages"][-1]["attachments"], [second_data["uploaded_files"][0]["file_id"]])
+        self.assertIn(second_data["uploaded_files"][0]["file_id"], second_data["conversation"]["messages"][-1]["attachments"])
         runs = self.client.get(f"/api/conversations/{conversation_id}/runs").json()["items"]
-        self.assertTrue(all("/1/runs/" in run["final_message_path"].replace("\\", "/") for run in runs))
+        self.assertTrue(all(f"/{conversation_id}/runs/" in run["final_message_path"].replace("\\", "/") for run in runs))
 
     def test_duplicate_upload_reuses_existing_file_by_hash(self) -> None:
         conversation_id = self._create_conversation()
@@ -199,12 +253,12 @@ class MilestoneTests(unittest.TestCase):
         first = self.client.post(
             f"/api/conversations/{conversation_id}/files",
             files={"file": ("raw_data.csv", payload, "text/csv")},
-            data={"kind": "input", "description": "first"},
+            data={"kind": "material", "description": "first"},
         )
         second = self.client.post(
             f"/api/conversations/{conversation_id}/files",
             files={"file": ("raw_data.csv", payload, "text/csv")},
-            data={"kind": "input", "description": "second"},
+            data={"kind": "material", "description": "second"},
         )
         self.assertEqual(first.status_code, 200, first.text)
         self.assertEqual(second.status_code, 200, second.text)
@@ -253,7 +307,7 @@ class MilestoneTests(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["device_id"], "device_default")
         self.assertEqual(items[0]["runner_mode"], "local")
-        self.assertEqual(items[0]["local_executable"], "python")
+        self.assertEqual(items[0]["local_executable"], sys.executable)
 
     def test_create_device_hides_ssh_password(self) -> None:
         response = self.client.post(
@@ -263,6 +317,7 @@ class MilestoneTests(unittest.TestCase):
                 "runner_mode": "ssh",
                 "host": "codex.example.com",
                 "user": "openclaw",
+                "codex_executable": "/home/openclaw/.local/bin/codex",
                 "ssh_auth_method": "password",
                 "ssh_password": "secret",
             },
@@ -297,7 +352,7 @@ class MilestoneTests(unittest.TestCase):
         upload = self.client.post(
             f"/api/conversations/{conversation_id}/files",
             files={"file": ("raw_data.csv", b"a,b\n1,2\n", "text/csv")},
-            data={"kind": "input"},
+            data={"kind": "material"},
         )
         self.assertEqual(upload.status_code, 200, upload.text)
         response = self.client.post(
@@ -312,14 +367,12 @@ class MilestoneTests(unittest.TestCase):
         session = session_response.json()
         session_root = Path(session["root_path"])
         self.assertIn("sessions", session_root.parts)
-        self.assertTrue((session_root / "task.json").is_file())
         self.assertTrue((session_root / "prompt.md").is_file())
         self.assertTrue((session_root / upload.json()["relative_path"]).is_file())
-        self.assertTrue((session_root / ".gateway" / "manifest.json").is_file())
         self.assertEqual(session["manifest"]["files"][0]["asset_id"], upload.json()["file_id"])
         self.assertEqual(session["manifest"]["distribution"]["strategy_version"], "v1")
-        self.assertEqual(session["manifest"]["files"][0]["mode"], "original")
-        self.assertIn("strategy", session["manifest"]["files"][0])
+        self.assertEqual(session["manifest"]["plan"]["candidate_assets"][0]["asset_id"], upload.json()["file_id"])
+        self.assertIn("summary", session["manifest"]["plan"]["candidate_assets"][0])
 
         runs = self.client.get(f"/api/conversations/{conversation_id}/runs").json()["items"]
         self.assertIn("sessions", Path(runs[-1]["command"]["session"]["root_path"]).parts)
@@ -331,7 +384,7 @@ class MilestoneTests(unittest.TestCase):
         upload = self.client.post(
             f"/api/conversations/{conversation_id}/files",
             files={"file": ("large.docx", payload, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
-            data={"kind": "input"},
+            data={"kind": "material"},
         )
         self.assertEqual(upload.status_code, 200, upload.text)
         derivative_source = self.tmpdir / "large.extracted.md"
@@ -353,13 +406,10 @@ class MilestoneTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
         session = self.client.get(f"/api/conversations/runs/{response.json()['run_id']}/session").json()
-        item = session["manifest"]["files"][0]
-        self.assertEqual(item["mode"], "extracted_text")
-        self.assertEqual(item["strategy"], "large_document_text_preferred")
-        self.assertTrue(item["derivative_id"])
-        self.assertTrue(item["target_path"].startswith("inputs/"))
-        self.assertTrue(item["target_path"].endswith("_large.extracted.md"))
-        self.assertTrue((Path(session["root_path"]) / item["target_path"]).is_file())
+        item = session["manifest"]["plan"]["candidate_assets"][0]
+        self.assertEqual(item["asset_id"], upload.json()["file_id"])
+        self.assertIn("large.docx", item["filename"])
+        self.assertIn("summary", item)
 
     def test_split_ssh_target_accepts_user_at_host(self) -> None:
         host, user = split_ssh_target("openclaw@192.168.110.38", "")
@@ -375,7 +425,7 @@ class MilestoneTests(unittest.TestCase):
             response = self.client.post(
                 f"/api/conversations/{conversation_id}/files",
                 files={"file": ("unique.csv", os.urandom(8), "text/csv")},
-                data={"kind": "input"},
+                data={"kind": "material"},
             )
             self.assertEqual(response.status_code, 200, response.text)
         events = self.client.get(f"/api/conversations/{conversation_id}/events").json()["items"]
@@ -407,7 +457,7 @@ class MilestoneTests(unittest.TestCase):
         upload = self.client.post(
             f"/api/conversations/{conversation_id}/files",
             files={"file": ("source.csv", b"a,b\n1,2\n", "text/csv")},
-            data={"kind": "input"},
+            data={"kind": "material"},
         )
         self.assertEqual(upload.status_code, 200, upload.text)
         source_file_id = upload.json()["file_id"]
@@ -424,13 +474,18 @@ class MilestoneTests(unittest.TestCase):
         )
         self.assertEqual(len(registered), 1)
         self.assertEqual(registered[0]["kind"], "output")
-        self.assertTrue((workspace / registered[0]["relative_path"]).is_file())
+        self.assertTrue(registered[0]["relative_path"].startswith("versions/"))
 
         branches = self.client.get(f"/api/conversations/{conversation_id}/file-branches").json()["items"]
-        group = next(item for item in branches if item["branch_key"] == "source.csv")
-        self.assertEqual(group["stored_count"], 2)
-        self.assertTrue(group["branches"][-1]["is_generated_output"])
-        self.assertEqual(group["branches"][-1]["generated_from_file_ids"], [source_file_id])
+        generated_branches = [
+            branch
+            for group in branches
+            for branch in group["branches"]
+            if branch["file_id"] == registered[0]["file_id"]
+        ]
+        self.assertEqual(len(generated_branches), 1)
+        self.assertTrue(generated_branches[0]["is_generated_output"])
+        self.assertEqual(generated_branches[0]["generated_from_file_ids"], [source_file_id])
 
         download = self.client.get(f"/api/conversations/files/{registered[0]['file_id']}/download")
         self.assertEqual(download.status_code, 200, download.text)
@@ -454,6 +509,30 @@ class MilestoneTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["conversation_id"]
+
+    def _put_path(self, source_path: Path, object_key: str, content_type: str | None = None) -> None:
+        self.objects[object_key] = Path(source_path).read_bytes()
+
+    def _copy_to_path(self, object_key: str, target_path: Path) -> None:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(self.objects[object_key])
+
+    def _object_size(self, object_key: str) -> int:
+        return len(self.objects[object_key])
+
+    def _iter_bytes(self, object_key: str, chunk_size: int = 1024 * 1024):
+        data = self.objects[object_key]
+        for index in range(0, len(data), chunk_size):
+            yield data[index : index + chunk_size]
+
+    def _delete_object(self, object_key: str) -> None:
+        self.objects.pop(object_key, None)
+
+    def _presign_download(self, object_key: str) -> str:
+        return f"https://minio.test/download/{object_key}"
+
+    def _presign_upload(self, object_key: str, content_type: str | None = None) -> str:
+        return f"https://minio.test/upload/{object_key}"
 
 
 if __name__ == "__main__":

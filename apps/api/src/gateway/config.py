@@ -41,6 +41,7 @@ class Settings:
         self.codex_max_runtime_seconds = int(os.getenv("CODEX_MAX_RUNTIME_SECONDS", "900"))
         self.codex_sandbox_mode = os.getenv("CODEX_SANDBOX_MODE", "workspace-write")
         self.codex_disable_external_mcps = env_bool("CODEX_DISABLE_EXTERNAL_MCPS", True)
+        self.asset_mcp_url = os.getenv("ASSET_MCP_URL", "http://127.0.0.1:8010/mcp")
         self.max_upload_size_mb = int(os.getenv("MAX_UPLOAD_SIZE_MB", "200"))
         self.object_storage_endpoint = os.getenv("OBJECT_STORAGE_ENDPOINT", "http://127.0.0.1:19000")
         self.object_storage_bucket = os.getenv("OBJECT_STORAGE_BUCKET", "mathpilot-dev")

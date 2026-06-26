@@ -21,6 +21,39 @@ def cleanup_remote_sessions(device: dict[str, Any], *, older_than_minutes: int =
     return _run_with_openssh(device, command)
 
 
+def cleanup_remote_run_workspace(
+    device: dict[str, Any],
+    *,
+    session_id: str,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """Reserved entrypoint for per-run remote workspace cleanup.
+
+    TODO:
+    - Implement explicit deletion of one remote session workspace after the new
+      OSS/MCP data plane is fully active.
+    - Use Paramiko/OpenSSH through the same helpers as cleanup_remote_sessions.
+    - Add cache policy inputs later: ttl, max_bytes, min_hit_count,
+      last_accessed_at, and LRU ordering.
+    - Keep destructive deletion opt-in until remote cache hit behavior is
+      observable.
+    """
+    if device.get("runner_mode") != "ssh":
+        raise ValueError("Only ssh devices have remote workspaces to clean.")
+    return {
+        "status": "planned",
+        "dry_run": dry_run,
+        "session_id": session_id,
+        "message": "Per-run remote workspace cleanup is reserved but not implemented yet.",
+        "future_policy": {
+            "ttl": True,
+            "lru": True,
+            "cache_hit_rate": True,
+            "max_bytes": True,
+        },
+    }
+
+
 def _cleanup_command(remote_root: str, older_than_minutes: int) -> str:
     root_expr = _remote_root_expr(remote_root)
     return " ; ".join(

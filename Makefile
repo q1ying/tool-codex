@@ -1,7 +1,7 @@
-.PHONY: api test clean
+.PHONY: api test test-all clean
 
 api:
-	python -m uvicorn gateway.main:app --app-dir apps/api/src --host 127.0.0.1 --port 8010 --reload
+	python -m uvicorn gateway.main:app --app-dir apps/api/src --host 0.0.0.0 --port 8010
 
 start-api:
 	python scripts/start_api.py
@@ -17,6 +17,9 @@ ssh-check:
 
 test:
 	python -m unittest discover -s apps/api/tests -p "test_*.py"
+
+test-all:
+	python scripts/run_all_tests.py
 
 clean:
 	python scripts/clean_old_workspaces.py

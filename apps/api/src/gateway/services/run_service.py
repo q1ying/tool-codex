@@ -13,6 +13,7 @@ from .event_service import EventService
 from .file_service import FileService
 from .ids import now_iso, short_id
 from .prompt_compiler import PromptCompiler
+from .run_auth_service import RunAuthService
 from .runtime_state import runtime_state
 from .session_workspace_service import SessionWorkspaceService
 from .workspace_service import WorkspaceService
@@ -57,6 +58,7 @@ class RunService:
         self.device_service = device_service
         self.session_service = session_service
         self.runner = CodexRunner()
+        self.run_auth = RunAuthService(conn)
 
     def queue_run(
         self,
@@ -80,18 +82,21 @@ class RunService:
             user_id=conv["user_id"],
             device_id=device["device_id"],
         )
+        asset_token = self.run_auth.create_token(run_id=run_id)
+        asset_mcp_url = self._asset_mcp_url()
+        asset_mcp_tools = self._asset_mcp_enabled_tools()
         session_root = Path(session["root_path"])
         command_args = [
             "exec",
-            "-C",
-            str(session_root),
+            "--ephemeral",
+            "--ignore-user-config",
         ]
-        if bool(device.get("disable_external_mcps", self.settings.codex_disable_external_mcps)):
-            command_args.append("--ignore-user-config")
         command_args.extend(
             [
                 "--sandbox",
                 device["sandbox_mode"],
+                "-C",
+                str(session_root),
                 "--skip-git-repo-check",
                 "--json",
                 "--output-last-message",
@@ -102,12 +107,24 @@ class RunService:
             "runner_mode": device["runner_mode"],
             "executable": device["local_executable"],
             "args": command_args,
-            "config_overrides": self._codex_config_overrides(device),
+            "config_overrides": self._codex_config_overrides(
+                device,
+                asset_mcp_url=asset_mcp_url,
+                asset_mcp_enabled_tools=asset_mcp_tools,
+                include_asset_mcp=True,
+            ),
             "device": device_snapshot(device),
             "session": {
                 "session_id": session["session_id"],
                 "root_path": str(session_root),
                 "expires_at": session["expires_at"],
+            },
+            "asset_mcp": {
+                "url": asset_mcp_url,
+                "mode": "ephemeral_exec_config",
+                "token_env_var": "ASSET_MCP_TOKEN",
+                "enabled_tools": asset_mcp_tools,
+                "note": "MCP is injected with codex exec -c for this run only; do not use codex mcp add for per-run config.",
             },
             "ssh": {
                 "host": device["host"],
@@ -125,6 +142,15 @@ class RunService:
             "device_id": device["device_id"],
             "device": device_snapshot(device),
             "session_id": session["session_id"],
+            "asset_mcp": {
+                "url": asset_mcp_url,
+                "token_id": asset_token["token_id"],
+                "token": asset_token["token"],
+                "token_env_var": "ASSET_MCP_TOKEN",
+                "expires_at": asset_token["expires_at"],
+                "mode": "ephemeral_exec_config",
+                "enabled_tools": asset_mcp_tools,
+            },
         }
         self.conn.execute(
             """
@@ -218,6 +244,9 @@ class RunService:
                     sandbox_mode=device.get("sandbox_mode") or self.settings.codex_sandbox_mode,
                     disable_external_mcps=bool(device.get("disable_external_mcps", self.settings.codex_disable_external_mcps)),
                     config_overrides=tuple([*(device.get("config_overrides") or []), *dynamic_config_overrides]),
+                    asset_mcp_token=str((run_metadata.get("asset_mcp") or {}).get("token") or ""),
+                    asset_mcp_url=str((run_metadata.get("asset_mcp") or {}).get("url") or self._asset_mcp_url()),
+                    asset_mcp_enabled_tools=tuple((run_metadata.get("asset_mcp") or {}).get("enabled_tools") or self._asset_mcp_enabled_tools()),
                 ),
                 on_event=lambda typ, msg, payload: self._handle_runner_event(conversation_id, run_id, typ, msg, payload),
             )
@@ -349,7 +378,14 @@ class RunService:
                 raise RuntimeError(f"Run device no longer exists: {device_id}")
         raise RuntimeError("Run metadata does not include a device_id.")
 
-    def _codex_config_overrides(self, device: dict[str, Any]) -> list[str]:
+    def _codex_config_overrides(
+        self,
+        device: dict[str, Any],
+        *,
+        asset_mcp_url: str | None = None,
+        asset_mcp_enabled_tools: list[str] | None = None,
+        include_asset_mcp: bool = False,
+    ) -> list[str]:
         overrides = ["shell_environment_policy.inherit=all"]
         if bool(device.get("disable_external_mcps", self.settings.codex_disable_external_mcps)):
             overrides.extend(
@@ -360,8 +396,35 @@ class RunService:
                     'plugins."browser@openai-bundled".enabled=false',
                 ]
             )
+        if include_asset_mcp and asset_mcp_url:
+            tools = asset_mcp_enabled_tools or self._asset_mcp_enabled_tools()
+            tools_literal = "[" + ",".join(json.dumps(item) for item in tools) + "]"
+            overrides.extend(
+                [
+                    "mcp.remote_mcp_client_enabled=true",
+                    f"mcp_servers.asset.url={json.dumps(asset_mcp_url)}",
+                    'mcp_servers.asset.bearer_token_env_var="ASSET_MCP_TOKEN"',
+                    "mcp_servers.asset.required=true",
+                    f"mcp_servers.asset.enabled_tools={tools_literal}",
+                ]
+            )
         overrides.extend(str(item) for item in device.get("config_overrides") or [])
         return overrides
+
+    def _asset_mcp_url(self) -> str:
+        return self.settings.asset_mcp_url
+
+    def _asset_mcp_enabled_tools(self) -> list[str]:
+        return [
+            "list_candidate_assets",
+            "search_assets",
+            "get_asset_summary",
+            "read_asset_chunk",
+            "get_asset_download_url",
+            "get_artifact_upload_url",
+            "complete_artifact",
+            "report_progress",
+        ]
 
     def _dynamic_config_overrides(self, plan: dict[str, list[dict[str, Any]]]) -> list[str]:
         materialized = plan.get("materialize") or []

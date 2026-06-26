@@ -26,8 +26,8 @@
 
 - 远程 Codex 机器直接通过 OSS signed URL 下载输入文件。
 - Codex 机器直接通过 signed URL 上传输出 artifact。
-- MCP 工具：`search_assets`、`download_asset`、`upload_artifact` 等。
-- 真实 FilePlanner 智能检索和 chunk 级读取。
+- 基础 MCP 工具：`search_assets`、`get_asset_download_url`、`get_artifact_upload_url`、`complete_artifact` 等。
+- 更强的 FilePlanner 智能检索和面向 Word/PDF/Excel 派生物的 chunk 级读取。
 - 派生物生成流水线，例如 extracted text、chunk、archive manifest、preview。
 - 输出验收报告。
 - 版本恢复和基于版本继续运行。

@@ -5,6 +5,7 @@ import sqlite3
 from .config import get_settings
 from .db import connect
 from .services.asset_service import AssetService
+from .services.asset_access_service import AssetAccessService
 from .services.conversation_service import ConversationService
 from .services.device_service import DeviceService
 from .services.distribution_service import DistributionService
@@ -12,6 +13,7 @@ from .services.event_service import EventService
 from .services.file_service import FileService
 from .services.prompt_compiler import PromptCompiler
 from .services.run_service import RunService
+from .services.run_auth_service import RunAuthService
 from .services.session_workspace_service import SessionWorkspaceService
 from .services.storage_service import StorageService
 from .services.workspace_service import WorkspaceService
@@ -27,6 +29,8 @@ def services() -> dict:
     device_service = DeviceService(conn, settings)
     storage_service = StorageService(settings)
     asset_service = AssetService(conn, storage_service)
+    asset_access_service = AssetAccessService(conn, asset_service)
+    run_auth_service = RunAuthService(conn)
     distribution_service = DistributionService(conn, asset_service)
     session_service = SessionWorkspaceService(conn, settings.data_dir, distribution_service)
     event_service = EventService(conn)
@@ -40,6 +44,8 @@ def services() -> dict:
         "devices": device_service,
         "storage": storage_service,
         "assets": asset_service,
+        "asset_access": asset_access_service,
+        "run_auth": run_auth_service,
         "distribution": distribution_service,
         "sessions": session_service,
         "events": event_service,

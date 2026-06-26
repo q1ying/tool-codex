@@ -18,6 +18,14 @@ make web
 make test
 ```
 
+运行全部测试入口：
+
+```powershell
+make test-all
+```
+
+`test-all` 会先尝试 Vitest；没有 `package.json` / `vitest.config.*` 时跳过前端测试。后端优先使用 pytest；当前环境没有 pytest 时会自动回退到 unittest。
+
 ## CORS
 
 本地 Web 来源在这里允许：

@@ -54,6 +54,20 @@ class DistributionService:
 
     def materialize_plan(self, *, session_root: Path, run_id: str, plan: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
         manifest_files: list[dict[str, Any]] = []
+        for item in plan.get("candidate_assets", []):
+            self.asset_service.record_run_asset(
+                run_id=run_id,
+                asset_id=item["asset_id"],
+                usage_type="candidate",
+                local_path=item.get("target_path"),
+                reason=item.get("why_included") or item.get("reason") or "",
+                metadata={
+                    "selected_mode": item.get("selected_mode"),
+                    "summary": item.get("summary"),
+                    "source": item.get("source", {}),
+                },
+                commit=False,
+            )
         for item in plan.get("materialize", []):
             target = safe_join(session_root, item["target_path"])
             self.asset_service.materialize(item["asset_id"], target)

@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, Response
 
 from .config import get_settings
 from .db import connect, init_db
+from .mcp import server as mcp_server
 from .routers import assets, conversations, devices, health, system
 from .services.asset_service import AssetService
 from .services.distribution_service import DistributionService
@@ -64,24 +65,27 @@ async def _session_cleanup_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(_session_cleanup_loop())
-    try:
-        yield
-    finally:
-        cleanup_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await cleanup_task
+    async with app.state.asset_mcp.session_manager.run():
+        try:
+            yield
+        finally:
+            cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cleanup_task
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
     init_db(settings.database_path)
+    asset_mcp, asset_mcp_app = mcp_server.create_asset_mcp_app()
     app = FastAPI(title="Codex Workspace Gateway", version="0.1.0", lifespan=lifespan)
+    app.state.asset_mcp = asset_mcp
 
     @app.middleware("http")
     async def cors_fallback_middleware(request: Request, call_next):
         origin = request.headers.get("origin")
         if request.method == "OPTIONS":
-            return _apply_cors_headers(Response(status_code=204), origin)
+            return _apply_cors_headers(Response(status_code=204, media_type="application/json"), origin)
         try:
             response = await call_next(request)
         except Exception as exc:
@@ -104,6 +108,7 @@ def create_app() -> FastAPI:
     app.include_router(assets.router)
     app.include_router(devices.router)
     app.include_router(conversations.router)
+    app.mount("/", asset_mcp_app)
     return app
 
 

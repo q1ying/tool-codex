@@ -7,7 +7,6 @@ import posixpath
 from pathlib import Path
 import queue
 import shlex
-import stat
 import subprocess
 import threading
 import time
@@ -38,6 +37,9 @@ class CodexRunRequest:
     sandbox_mode: str = "workspace-write"
     disable_external_mcps: bool = True
     config_overrides: tuple[str, ...] = ()
+    asset_mcp_token: str = ""
+    asset_mcp_url: str = ""
+    asset_mcp_enabled_tools: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -55,15 +57,15 @@ class CodexRunner:
         cmd = [
             job.executable,
             "exec",
-            "-C",
-            str(job.workspace_path),
+            "--ephemeral",
+            "--ignore-user-config",
         ]
-        if job.disable_external_mcps:
-            cmd.append("--ignore-user-config")
         cmd.extend(
             [
             "--sandbox",
             job.sandbox_mode,
+            "-C",
+            str(job.workspace_path),
             "--skip-git-repo-check",
             "--json",
             "--output-last-message",
@@ -93,7 +95,7 @@ class CodexRunner:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                env=_utf8_env(),
+                env=_utf8_env(job),
             )
         except FileNotFoundError as exc:
             return CodexRunResult(exit_code=None, status="failed", error_message=str(exc))
@@ -126,22 +128,13 @@ class SshCodexRunner:
         remote_final = _remote_join(remote_workspace, ".gateway", "run_final.md")
 
         setup = self._run_simple(
-            self._ssh_cmd(job, f"mkdir -p {_remote_shell_path(remote_workspace)}"),
+            self._ssh_cmd(job, f"mkdir -p {_remote_shell_path(remote_workspace)} {_remote_shell_path(_remote_join(remote_workspace, '.gateway'))} {_remote_shell_path(_remote_join(remote_workspace, 'outputs'))} {_remote_shell_path(_remote_join(remote_workspace, 'logs'))}"),
             "ssh_setup",
             on_event,
             job.jsonl_log_path,
         )
         if setup.status != "completed":
             return setup
-
-        upload = self._run_simple(
-            self._scp_upload_cmd(job, job.workspace_path, remote_workspace),
-            "ssh_upload",
-            on_event,
-            job.jsonl_log_path,
-        )
-        if upload.status != "completed":
-            return upload
 
         remote_cmd = self._remote_codex_command(job, remote_workspace, remote_final)
         if on_event:
@@ -155,15 +148,6 @@ class SshCodexRunner:
             stdin_text=job.prompt_text,
             heartbeat_event_type="remote_codex_running",
         )
-
-        download = self._run_simple(
-            self._scp_download_cmd(job, remote_workspace, job.workspace_path),
-            "ssh_download",
-            on_event,
-            job.jsonl_log_path,
-        )
-        if download.status != "completed" and run_result.status == "completed":
-            return download
 
         remote_final_fetch = self._run_simple(
             self._scp_file_download_cmd(job, remote_final, job.final_message_path),
@@ -183,15 +167,15 @@ class SshCodexRunner:
         parts = [
             job.ssh_executable,
             "exec",
-            "-C",
-            _remote_shell_path(remote_workspace),
+            "--ephemeral",
+            "--ignore-user-config",
         ]
-        if job.disable_external_mcps:
-            parts.append("--ignore-user-config")
         parts.extend(
             [
             "--sandbox",
             job.sandbox_mode,
+            "-C",
+            _remote_shell_path(remote_workspace),
             "--skip-git-repo-check",
             "--json",
             "--output-last-message",
@@ -209,8 +193,13 @@ class SshCodexRunner:
                 quoted.append(shlex.quote(text))
         command = " ".join(quoted)
         path_prefix = _remote_executable_path_prefix(job.ssh_executable)
+        exports = []
+        if job.asset_mcp_token:
+            exports.append(f"export ASSET_MCP_TOKEN={shlex.quote(job.asset_mcp_token)}")
         if path_prefix:
-            return f"export PATH={path_prefix}:$PATH; {command}"
+            exports.append(f"export PATH={path_prefix}:$PATH")
+        if exports:
+            return "; ".join(exports) + f"; {command}"
         return command
 
     def _ssh_base(self, job: CodexRunRequest) -> list[str]:
@@ -232,14 +221,6 @@ class SshCodexRunner:
 
     def _ssh_cmd(self, job: CodexRunRequest, remote_command: str) -> list[str]:
         return [*self._ssh_base(job), f"{job.ssh_user}@{job.ssh_host}", remote_command]
-
-    def _scp_upload_cmd(self, job: CodexRunRequest, local_workspace: Path, remote_workspace: str) -> list[str]:
-        source = str(local_workspace / ".")
-        return [*self._scp_base(job), source, self._remote_target(job, remote_workspace)]
-
-    def _scp_download_cmd(self, job: CodexRunRequest, remote_workspace: str, local_workspace: Path) -> list[str]:
-        local_workspace.mkdir(parents=True, exist_ok=True)
-        return [*self._scp_base(job), self._remote_target(job, f"{remote_workspace}/."), str(local_workspace)]
 
     def _scp_file_download_cmd(self, job: CodexRunRequest, remote_file: str, local_file: Path) -> list[str]:
         local_file.parent.mkdir(parents=True, exist_ok=True)
@@ -307,7 +288,9 @@ class ParamikoPasswordCodexRunner:
             )
             sftp = client.open_sftp()
             self._mkdir_p(sftp, remote_workspace)
-            self._put_dir(sftp, job.workspace_path, remote_workspace)
+            self._mkdir_p(sftp, _remote_join(remote_workspace, ".gateway"))
+            self._mkdir_p(sftp, _remote_join(remote_workspace, "outputs"))
+            self._mkdir_p(sftp, _remote_join(remote_workspace, "logs"))
             sftp.close()
 
             command = _wrap_remote_command(job, SshCodexRunner()._remote_codex_command(job, remote_workspace, remote_final))
@@ -316,7 +299,6 @@ class ParamikoPasswordCodexRunner:
             result = self._exec_streaming(client, command, job, on_event)
 
             sftp = client.open_sftp()
-            self._get_dir(sftp, remote_workspace, job.workspace_path)
             try:
                 self._get_file(sftp, remote_final, job.final_message_path)
             except OSError:
@@ -429,29 +411,6 @@ class ParamikoPasswordCodexRunner:
             except OSError:
                 sftp.mkdir(current)
 
-    def _put_dir(self, sftp, local_root: Path, remote_root: str) -> None:
-        for path in local_root.rglob("*"):
-            rel = path.relative_to(local_root).as_posix()
-            remote_path = _remote_join(remote_root, rel)
-            if path.is_dir():
-                self._mkdir_p(sftp, remote_path)
-            else:
-                self._mkdir_p(sftp, posixpath.dirname(remote_path))
-                sftp.put(str(path), _remote_no_tilde(remote_path))
-
-    def _get_dir(self, sftp, remote_root: str, local_root: Path) -> None:
-        self._get_dir_inner(sftp, _remote_no_tilde(remote_root), local_root)
-
-    def _get_dir_inner(self, sftp, remote_path: str, local_path: Path) -> None:
-        local_path.mkdir(parents=True, exist_ok=True)
-        for attr in sftp.listdir_attr(remote_path):
-            child_remote = _remote_join(remote_path, attr.filename)
-            child_local = local_path / attr.filename
-            if _sftp_is_dir(attr):
-                self._get_dir_inner(sftp, child_remote, child_local)
-            else:
-                sftp.get(child_remote, str(child_local))
-
     def _get_file(self, sftp, remote_path: str, local_path: Path) -> None:
         local_path.parent.mkdir(parents=True, exist_ok=True)
         sftp.get(_remote_no_tilde(remote_path), str(local_path))
@@ -477,7 +436,7 @@ class ParamikoPasswordCodexRunner:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                env=_utf8_env(),
+                env=_utf8_env(job),
             )
         except FileNotFoundError as exc:
             return CodexRunResult(exit_code=None, status="failed", error_message=str(exc))
@@ -514,6 +473,27 @@ def _codex_config_overrides(job: CodexRunRequest) -> list[str]:
                 'plugins."browser@openai-bundled".enabled=false',
             ]
         )
+    if job.asset_mcp_token and job.asset_mcp_url:
+        enabled_tools = job.asset_mcp_enabled_tools or (
+            "list_candidate_assets",
+            "search_assets",
+            "get_asset_summary",
+            "read_asset_chunk",
+            "get_asset_download_url",
+            "get_artifact_upload_url",
+            "complete_artifact",
+            "report_progress",
+        )
+        tools_literal = "[" + ",".join(json.dumps(item) for item in enabled_tools) + "]"
+        overrides.extend(
+            [
+                "mcp.remote_mcp_client_enabled=true",
+                f"mcp_servers.asset.url={json.dumps(job.asset_mcp_url)}",
+                'mcp_servers.asset.bearer_token_env_var="ASSET_MCP_TOKEN"',
+                "mcp_servers.asset.required=true",
+                f"mcp_servers.asset.enabled_tools={tools_literal}",
+            ]
+        )
     overrides.extend(job.config_overrides)
     args: list[str] = []
     for override in overrides:
@@ -521,12 +501,14 @@ def _codex_config_overrides(job: CodexRunRequest) -> list[str]:
     return args
 
 
-def _utf8_env() -> dict[str, str]:
+def _utf8_env(job: CodexRunRequest | None = None) -> dict[str, str]:
     env = dict(os.environ)
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("LANG", "C.UTF-8")
     env.setdefault("LC_ALL", "C.UTF-8")
+    if job is not None and job.asset_mcp_token:
+        env["ASSET_MCP_TOKEN"] = job.asset_mcp_token
     return env
 
 
@@ -715,7 +697,3 @@ def _remote_no_tilde(path: str) -> str:
     if normalized.startswith("~/"):
         return normalized[2:]
     return normalized
-
-
-def _sftp_is_dir(attr) -> bool:
-    return stat.S_ISDIR(attr.st_mode)
