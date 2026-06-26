@@ -475,7 +475,9 @@ def _codex_config_overrides(job: CodexRunRequest) -> list[str]:
         )
     if job.asset_mcp_token and job.asset_mcp_url:
         enabled_tools = job.asset_mcp_enabled_tools or (
+            "get_run_context",
             "list_candidate_assets",
+            "list_conversation_assets",
             "search_assets",
             "get_asset_summary",
             "read_asset_chunk",

@@ -416,7 +416,9 @@ class RunService:
 
     def _asset_mcp_enabled_tools(self) -> list[str]:
         return [
+            "get_run_context",
             "list_candidate_assets",
+            "list_conversation_assets",
             "search_assets",
             "get_asset_summary",
             "read_asset_chunk",
