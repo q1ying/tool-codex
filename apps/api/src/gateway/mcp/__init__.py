@@ -1,1 +1,1 @@
-"""Run-scoped asset MCP endpoint."""
+"""Asset MCP server package."""

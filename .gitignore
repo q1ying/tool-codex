@@ -9,3 +9,4 @@ uvicorn.err.log
 
 .env
 
+.omx/

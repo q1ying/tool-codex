@@ -378,6 +378,82 @@ class MilestoneTests(unittest.TestCase):
         self.assertIn("sessions", Path(runs[-1]["command"]["session"]["root_path"]).parts)
         self.assertEqual(runs[-1]["session"]["session_id"], session["session_id"])
 
+    def test_asset_mcp_serves_run_context_and_candidate_assets(self) -> None:
+        conversation_id = self._create_conversation()
+        upload = self.client.post(
+            f"/api/conversations/{conversation_id}/files",
+            files={"file": ("raw_data.csv", b"a,b\n1,2\n", "text/csv")},
+            data={"kind": "material"},
+        )
+        self.assertEqual(upload.status_code, 200, upload.text)
+        response = self.client.post(
+            f"/api/conversations/{conversation_id}/runs",
+            json={"user_instruction": "use csv data"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        run_id = response.json()["run_id"]
+        row = services()["conn"].execute(
+            "SELECT metadata_json FROM codex_runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        token = json.loads(row["metadata_json"])["asset_mcp"]["token"]
+        headers = {
+            "Host": "127.0.0.1:8010",
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+        }
+
+        with TestClient(create_app()) as mcp_client:
+            initialize = mcp_client.post(
+                "/mcp",
+                headers=headers,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {"name": "gateway-test", "version": "1"},
+                    },
+                },
+            )
+            self.assertEqual(initialize.status_code, 200, initialize.text)
+            session_headers = dict(headers)
+            session_headers["mcp-session-id"] = initialize.headers["mcp-session-id"]
+
+            context = self._mcp_call(mcp_client, session_headers, "get_run_context")
+            self.assertEqual(context["run_id"], run_id)
+            self.assertEqual(context["conversation_id"], conversation_id)
+            self.assertEqual(context["candidate_asset_count"], 1)
+
+            candidates = self._mcp_call(mcp_client, session_headers, "list_candidate_assets")
+            self.assertEqual(len(candidates["items"]), 1)
+            self.assertEqual(candidates["items"][0]["asset_id"], upload.json()["file_id"])
+
+    def test_asset_mcp_rejects_missing_bearer_token(self) -> None:
+        with TestClient(create_app()) as mcp_client:
+            response = mcp_client.post(
+                "/mcp",
+                headers={
+                    "Host": "127.0.0.1:8010",
+                    "Accept": "application/json, text/event-stream",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {"name": "gateway-test", "version": "1"},
+                    },
+                },
+            )
+        self.assertEqual(response.status_code, 401, response.text)
+
     def test_distribution_prefers_ready_text_derivative_for_large_document(self) -> None:
         conversation_id = self._create_conversation()
         payload = b"x" * (2 * 1024 * 1024 + 1)
@@ -509,6 +585,23 @@ class MilestoneTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["conversation_id"]
+
+    def _mcp_call(self, client: TestClient, headers: dict[str, str], tool_name: str, arguments: dict | None = None) -> dict:
+        response = client.post(
+            "/mcp",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": tool_name,
+                "method": "tools/call",
+                "params": {"name": tool_name, "arguments": arguments or {}},
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()["result"]
+        if result.get("structuredContent") is not None:
+            return result["structuredContent"]
+        return json.loads(result["content"][0]["text"])
 
     def _put_path(self, source_path: Path, object_key: str, content_type: str | None = None) -> None:
         self.objects[object_key] = Path(source_path).read_bytes()

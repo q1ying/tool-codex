@@ -1,116 +1,144 @@
 from __future__ import annotations
 
-import json
-from contextvars import ContextVar
+import sqlite3
 from typing import Any
 from urllib.parse import urlparse
 
+from mcp.server.auth.middleware.auth_context import get_access_token
+from mcp.server.auth.provider import AccessToken
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.server import TransportSecuritySettings
+from mcp.server.transport_security import TransportSecuritySettings
 
 from ..config import get_settings
-from ..dependencies import services
-from .tools import TOOL_DEFINITIONS, call_tool
+from ..db import connect
+from ..services.asset_access_service import AssetAccessService
+from ..services.asset_service import AssetService
+from ..services.run_auth_service import RunAuthService, token_expires_at_epoch
+from ..services.storage_service import StorageService
 
-_current_run_id: ContextVar[str | None] = ContextVar("asset_mcp_run_id", default=None)
+ASSET_MCP_TOOLS = [
+    "list_tools",
+    "get_run_context",
+    "list_candidate_assets",
+    "list_conversation_assets",
+    "search_assets",
+    "get_asset_summary",
+    "read_asset_chunk",
+    "get_asset_download_url",
+    "get_artifact_upload_url",
+    "complete_artifact",
+    "report_progress",
+]
 
 
-class AuthenticatedAssetMcpApp:
-    def __init__(self, app: Any) -> None:
-        self.app = app
-
-    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
-        if scope.get("type") != "http":
-            await self.app(scope, receive, send)
-            return
-        run_id = self._authenticate(scope)
-        if run_id is None:
-            await _send_json(send, 401, {"detail": "missing or invalid bearer token"})
-            return
-        token = _current_run_id.set(run_id)
+class AssetMCPTokenVerifier:
+    async def verify_token(self, token: str) -> AccessToken | None:
+        settings = get_settings()
+        conn = connect(settings.database_path)
         try:
-            await self.app(scope, receive, send)
+            record = RunAuthService(conn).verify_token(token)
+            if record is None:
+                return None
+            return AccessToken(
+                token=record["token_id"],
+                client_id=record["run_id"],
+                scopes=["asset:read", "asset:write"],
+                expires_at=token_expires_at_epoch(record["expires_at"]),
+                resource=settings.asset_mcp_url,
+            )
         finally:
-            _current_run_id.reset(token)
-
-    def _authenticate(self, scope: dict[str, Any]) -> str | None:
-        authorization = _header(scope, b"authorization")
-        if not authorization or not authorization.lower().startswith("bearer "):
-            return None
-        bearer_token = authorization.split(" ", 1)[1].strip()
-        try:
-            auth = services()["run_auth"].authenticate(bearer_token)
-        except PermissionError:
-            return None
-        return str(auth["run_id"])
+            conn.close()
 
 
-def _run_id() -> str:
-    run_id = _current_run_id.get()
-    if not run_id:
-        raise PermissionError("asset MCP request is not bound to a run")
-    return run_id
-
-
-def create_asset_mcp_app() -> tuple[FastMCP, AuthenticatedAssetMcpApp]:
+def create_asset_mcp_app() -> tuple[FastMCP, Any]:
+    settings = get_settings()
+    auth = AuthSettings(
+        issuer_url=settings.asset_mcp_url,
+        resource_server_url=settings.asset_mcp_url,
+        required_scopes=["asset:read"],
+    )
     asset_mcp = FastMCP(
-        "codex-gateway-assets",
-        instructions="Run-scoped gateway asset tools for Codex Workspace Gateway.",
+        name="gateway-assets",
+        instructions=(
+            "Access run-scoped Gateway assets. Use get_run_context first, "
+            "then list_candidate_assets or search_assets before requesting chunks or URLs."
+        ),
+        token_verifier=AssetMCPTokenVerifier(),
+        auth=auth,
         streamable_http_path="/mcp",
         json_response=True,
-        stateless_http=True,
-        transport_security=TransportSecuritySettings(allowed_hosts=_allowed_hosts()),
+        transport_security=_transport_security(settings.asset_mcp_url),
     )
     _register_tools(asset_mcp)
-    return asset_mcp, AuthenticatedAssetMcpApp(asset_mcp.streamable_http_app())
+    return asset_mcp, asset_mcp.streamable_http_app()
 
 
 def _register_tools(asset_mcp: FastMCP) -> None:
-    @asset_mcp.tool(name="list_tools", description="列出 gateway asset MCP 当前提供的工具。")
+    @asset_mcp.tool(structured_output=True)
     def list_tools() -> dict[str, Any]:
-        return {"tools": TOOL_DEFINITIONS}
+        """List Gateway asset MCP tool names."""
+        return {"tools": ASSET_MCP_TOOLS}
 
-    @asset_mcp.tool(name="get_run_context", description="读取当前 bearer token 对应的 run、conversation、user 和 MCP 上下文。")
+    @asset_mcp.tool(structured_output=True)
     def get_run_context() -> dict[str, Any]:
-        return call_tool(_run_id(), "get_run_context", {})
+        """Return the run and conversation context bound to this bearer token."""
+        with _asset_access() as access:
+            return access.service.get_run_context(_current_run_id())
 
-    @asset_mcp.tool(name="list_candidate_assets", description="列出主服务器为当前 run 粗筛出的候选资产。")
+    @asset_mcp.tool(structured_output=True)
     def list_candidate_assets() -> dict[str, Any]:
-        return call_tool(_run_id(), "list_candidate_assets", {})
+        """List assets selected as candidates for this run."""
+        with _asset_access() as access:
+            return {"items": access.service.list_candidate_assets(_current_run_id())}
 
-    @asset_mcp.tool(name="list_conversation_assets", description="列出当前 run 所属用户和 conversation 下的全部 ready assets。")
+    @asset_mcp.tool(structured_output=True)
     def list_conversation_assets() -> dict[str, Any]:
-        return call_tool(_run_id(), "list_conversation_assets", {})
+        """List non-deleted assets in this run's conversation."""
+        with _asset_access() as access:
+            return {"items": access.service.list_conversation_assets(_current_run_id())}
 
-    @asset_mcp.tool(name="search_assets", description="在当前 conversation 的 ready assets 中做关键词搜索。")
-    def search_assets(query: str, limit: int = 20) -> dict[str, Any]:
-        return call_tool(_run_id(), "search_assets", {"query": query, "limit": limit})
+    @asset_mcp.tool(structured_output=True)
+    def search_assets(query: str = "", limit: int = 20) -> dict[str, Any]:
+        """Search candidate and conversation assets by filename, summary, kind, role, and metadata."""
+        with _asset_access() as access:
+            return {"items": access.service.search_assets(_current_run_id(), query, limit=limit)}
 
-    @asset_mcp.tool(name="get_asset_summary", description="读取某个 asset 的摘要和 metadata。")
+    @asset_mcp.tool(structured_output=True)
     def get_asset_summary(asset_id: str) -> dict[str, Any]:
-        return call_tool(_run_id(), "get_asset_summary", {"asset_id": asset_id})
+        """Return metadata, summary, and available derivatives for one authorized asset."""
+        with _asset_access() as access:
+            return access.service.get_asset_summary(_current_run_id(), asset_id)
 
-    @asset_mcp.tool(name="read_asset_chunk", description="按字节块读取当前 run 允许访问的 asset 内容；主要适合文本或已抽取文本的文件。")
+    @asset_mcp.tool(structured_output=True)
     def read_asset_chunk(asset_id: str, chunk_index: int = 0, chunk_size: int = 8192) -> dict[str, Any]:
-        return call_tool(
-            _run_id(),
-            "read_asset_chunk",
-            {"asset_id": asset_id, "chunk_index": chunk_index, "chunk_size": chunk_size},
-        )
+        """Read a bounded byte chunk from an authorized asset."""
+        with _asset_access() as access:
+            return access.service.read_asset_chunk(
+                _current_run_id(),
+                asset_id,
+                chunk_index=chunk_index,
+                chunk_size=chunk_size,
+            )
 
-    @asset_mcp.tool(name="get_asset_download_url", description="为当前 run 允许访问的 asset 生成短期对象存储下载 URL。")
+    @asset_mcp.tool(structured_output=True)
     def get_asset_download_url(asset_id: str) -> dict[str, Any]:
-        return call_tool(_run_id(), "get_asset_download_url", {"asset_id": asset_id})
+        """Create a short-lived download URL for an authorized asset."""
+        with _asset_access() as access:
+            return access.service.download_url(_current_run_id(), asset_id)
 
-    @asset_mcp.tool(name="get_artifact_upload_url", description="为当前 run 的输出 artifact 生成短期对象存储上传 URL。")
+    @asset_mcp.tool(structured_output=True)
     def get_artifact_upload_url(filename: str, content_type: str | None = None, role: str = "artifact") -> dict[str, Any]:
-        return call_tool(
-            _run_id(),
-            "get_artifact_upload_url",
-            {"filename": filename, "content_type": content_type, "role": role},
-        )
+        """Create a scoped upload URL for an artifact produced by this run."""
+        with _asset_access() as access:
+            return access.service.upload_url(
+                _current_run_id(),
+                filename=filename,
+                content_type=content_type,
+                role=role,
+            )
 
-    @asset_mcp.tool(name="complete_artifact", description="Codex 直传 artifact 到对象存储后，调用此工具让 gateway 正式登记输出资产。")
+    @asset_mcp.tool(structured_output=True)
     def complete_artifact(
         object_key: str,
         filename: str,
@@ -120,59 +148,75 @@ def _register_tools(asset_mcp: FastMCP) -> None:
         role: str = "artifact",
         parent_asset_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        return call_tool(
-            _run_id(),
-            "complete_artifact",
-            {
-                "object_key": object_key,
-                "filename": filename,
-                "size_bytes": size_bytes,
-                "sha256": sha256,
-                "content_type": content_type,
-                "role": role,
-                "parent_asset_ids": parent_asset_ids or [],
-            },
-        )
+        """Register a previously uploaded artifact as a run output candidate."""
+        with _asset_access() as access:
+            return access.service.complete_artifact(
+                _current_run_id(),
+                object_key=object_key,
+                filename=filename,
+                size_bytes=size_bytes,
+                sha256=sha256,
+                content_type=content_type,
+                role=role,
+                parent_asset_ids=parent_asset_ids or [],
+            )
 
-    @asset_mcp.tool(name="report_progress", description="向 gateway 报告当前 run 的进度。")
-    def report_progress(status: str, message: str = "") -> dict[str, Any]:
-        return call_tool(_run_id(), "report_progress", {"status": status, "message": message})
-
-
-def _header(scope: dict[str, Any], name: bytes) -> str:
-    for key, value in scope.get("headers") or []:
-        if key.lower() == name:
-            return value.decode("latin-1")
-    return ""
-
-
-async def _send_json(send: Any, status: int, payload: dict[str, Any]) -> None:
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    await send(
-        {
-            "type": "http.response.start",
-            "status": status,
-            "headers": [
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode("ascii")),
-            ],
-        }
-    )
-    await send({"type": "http.response.body", "body": body})
+    @asset_mcp.tool(structured_output=True)
+    def report_progress(message: str, progress: float | None = None, total: float | None = None, level: str = "info") -> dict[str, Any]:
+        """Record a progress event on the bound run."""
+        with _asset_access() as access:
+            return access.service.report_progress(
+                _current_run_id(),
+                message=message,
+                progress=progress,
+                total=total,
+                level=level,
+            )
 
 
-def _allowed_hosts() -> list[str]:
-    settings = get_settings()
-    parsed = urlparse(settings.asset_mcp_url)
-    hosts = {
-        "testserver",
-        "127.0.0.1",
-        "127.0.0.1:8010",
-        "localhost",
-        "localhost:8010",
-    }
+class _AssetAccessContext:
+    def __init__(self) -> None:
+        self.conn: sqlite3.Connection | None = None
+        self.service: AssetAccessService
+
+    def __enter__(self) -> "_AssetAccessContext":
+        settings = get_settings()
+        self.conn = connect(settings.database_path)
+        storage = StorageService(settings)
+        assets = AssetService(self.conn, storage)
+        self.service = AssetAccessService(self.conn, assets)
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        if self.conn is not None:
+            self.conn.close()
+
+
+def _asset_access() -> _AssetAccessContext:
+    return _AssetAccessContext()
+
+
+def _current_run_id() -> str:
+    token = get_access_token()
+    if token is None or not token.client_id:
+        raise PermissionError("asset MCP bearer token is missing or invalid")
+    return token.client_id
+
+
+def _transport_security(asset_mcp_url: str) -> TransportSecuritySettings:
+    parsed = urlparse(asset_mcp_url)
+    hosts = {"127.0.0.1:*", "localhost:*", "[::1]:*"}
+    origins = {"http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"}
     if parsed.netloc:
         hosts.add(parsed.netloc)
     if parsed.hostname:
-        hosts.add(parsed.hostname)
-    return sorted(hosts)
+        hosts.add(f"{parsed.hostname}:*")
+        origin_scheme = parsed.scheme or "http"
+        origins.add(f"{origin_scheme}://{parsed.hostname}:*")
+    if parsed.scheme and parsed.netloc:
+        origins.add(f"{parsed.scheme}://{parsed.netloc}")
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=sorted(hosts),
+        allowed_origins=sorted(origins),
+    )
