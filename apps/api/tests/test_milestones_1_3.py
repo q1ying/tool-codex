@@ -421,7 +421,8 @@ class MilestoneTests(unittest.TestCase):
             )
             self.assertEqual(initialize.status_code, 200, initialize.text)
             session_headers = dict(headers)
-            session_headers["mcp-session-id"] = initialize.headers["mcp-session-id"]
+            if initialize.headers.get("mcp-session-id"):
+                session_headers["mcp-session-id"] = initialize.headers["mcp-session-id"]
 
             context = self._mcp_call(mcp_client, session_headers, "get_run_context")
             self.assertEqual(context["run_id"], run_id)

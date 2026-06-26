@@ -42,6 +42,7 @@ class AssetMcpFlowTests(unittest.TestCase):
             patch("gateway.services.storage_service.StorageService.delete_object", self._delete_object),
             patch("gateway.services.storage_service.StorageService.presign_download", self._presign_download),
             patch("gateway.services.storage_service.StorageService.presign_upload", self._presign_upload),
+            patch("gateway.services.storage_service.StorageService.exists", self._exists),
         ]
         for item in self.patches:
             item.start()
@@ -98,6 +99,7 @@ class AssetMcpFlowTests(unittest.TestCase):
         self.assertIn("complete_artifact", tool_names)
 
         mcp_candidates = self._mcp_tool(token, "list_candidate_assets")
+        self.assertTrue(token.startswith("asset_mcp_"), token)
         self.assertEqual(mcp_candidates["items"][0]["asset_id"], asset_id)
 
         search = self.client.post(f"/api/runs/{run_id}/assets/search", json={"query": "实习 报告", "limit": 5})
@@ -173,7 +175,7 @@ class AssetMcpFlowTests(unittest.TestCase):
         )
         self.assertEqual(run.status_code, 200, run.text)
         token = self._run_asset_token(run.json()["run_id"])
-        headers = {"Authorization": f"Bearer {token}"}
+        headers = {"Authorization": f"Bearer {token}", "Host": "127.0.0.1:8010"}
 
         slash = self.client.get("/mcp/", headers=headers, follow_redirects=False)
         self.assertIn(slash.status_code, {307, 405}, slash.text)
@@ -256,6 +258,7 @@ class AssetMcpFlowTests(unittest.TestCase):
             "/mcp",
             headers={
                 "Authorization": f"Bearer {token}",
+                "Host": "127.0.0.1:8010",
                 "Accept": "application/json, text/event-stream",
             },
             json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}},
@@ -290,6 +293,9 @@ class AssetMcpFlowTests(unittest.TestCase):
 
     def _delete_object(self, object_key: str) -> None:
         self.objects.pop(object_key, None)
+
+    def _exists(self, object_key: str) -> bool:
+        return object_key in self.objects
 
     def _presign_download(self, object_key: str) -> str:
         return f"https://minio.test/download/{object_key}"

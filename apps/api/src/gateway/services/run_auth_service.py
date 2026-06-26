@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import hashlib
 import json
-import secrets
 import sqlite3
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -26,7 +25,7 @@ class RunAuthService:
         ttl_hours: int = DEFAULT_TOKEN_TTL_HOURS,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        token = secrets.token_urlsafe(32)
+        token = short_id("asset_mcp")
         token_id = short_id("tok")
         created_at = now_iso()
         expires_at = (datetime.now(ZoneInfo("Asia/Shanghai")) + timedelta(hours=ttl_hours)).isoformat(timespec="seconds")

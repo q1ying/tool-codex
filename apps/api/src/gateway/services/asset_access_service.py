@@ -195,10 +195,13 @@ class AssetAccessService:
             reason="download URL requested",
             metadata={"requested_at": now_iso()},
         )
+        download_url = self.asset_service.storage.presign_download(asset["object_key"])
         return {
             "run_id": run_id,
             "asset_id": asset_id,
-            "download_url": self.asset_service.storage.presign_download(asset["object_key"]),
+            "method": "GET",
+            "url": download_url,
+            "download_url": download_url,
             "expires_in_seconds": self.asset_service.storage.settings.object_storage_presign_expires_seconds,
         }
 

@@ -59,7 +59,7 @@ def create_asset_mcp_app() -> tuple[FastMCP, Any]:
         required_scopes=["asset:read"],
     )
     asset_mcp = FastMCP(
-        name="gateway-assets",
+        name="codex-gateway-assets",
         instructions=(
             "Access run-scoped Gateway assets. Use get_run_context first, "
             "then list_candidate_assets or search_assets before requesting chunks or URLs."
@@ -68,6 +68,7 @@ def create_asset_mcp_app() -> tuple[FastMCP, Any]:
         auth=auth,
         streamable_http_path="/mcp",
         json_response=True,
+        stateless_http=True,
         transport_security=_transport_security(settings.asset_mcp_url),
     )
     _register_tools(asset_mcp)
