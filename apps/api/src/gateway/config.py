@@ -2,6 +2,8 @@ from functools import lru_cache
 from pathlib import Path
 import os
 
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
+
 
 def load_dotenv(path: Path) -> None:
     if not path.exists():
@@ -33,7 +35,10 @@ def env_bool(name: str, default: bool) -> bool:
 
 class Settings:
     def __init__(self) -> None:
-        load_dotenv(Path(".env"))
+        load_dotenv(PROJECT_ROOT / ".env")
+        cwd_dotenv = Path(".env").resolve()
+        if cwd_dotenv != (PROJECT_ROOT / ".env").resolve():
+            load_dotenv(cwd_dotenv)
         self.default_user_id = os.getenv("DEFAULT_USER_ID", "user_default")
         self.default_conversation_id = os.getenv("DEFAULT_CONVERSATION_ID", "1")
         self.data_dir = Path(os.getenv("GATEWAY_DATA_DIR", "data")).resolve()

@@ -556,6 +556,7 @@
           const data = await request("/api/health");
           $("healthPill").textContent = data.status === "ok" ? "API 正常" : "API 异常";
           $("healthPill").className = data.status === "ok" ? "pill ok" : "pill bad";
+          $("healthPill").title = data.asset_mcp_url ? `Asset MCP: ${data.asset_mcp_url}` : "";
         } catch (error) {
           $("healthPill").textContent = "API 未连接";
           $("healthPill").className = "pill bad";

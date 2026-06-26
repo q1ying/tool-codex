@@ -17,7 +17,14 @@ from .services.distribution_service import DistributionService
 from .services.session_workspace_service import SessionWorkspaceService
 from .services.storage_service import StorageService
 
-LOCAL_ORIGIN_RE = re.compile(r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$")
+LOCAL_ORIGIN_RE = re.compile(
+    r"^https?://("
+    r"localhost|127\.0\.0\.1|"
+    r"10(?:\.\d{1,3}){3}|"
+    r"192\.168(?:\.\d{1,3}){2}|"
+    r"172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}"
+    r")(?::\d+)?$"
+)
 SESSION_CLEANUP_INTERVAL_SECONDS = 60 * 60
 
 
@@ -98,7 +105,7 @@ def create_app() -> FastAPI:
             "http://127.0.0.1:5173",
             "http://localhost:5173",
         ],
-        allow_origin_regex=r"https?://(127\.0\.0\.1|localhost)(:\d+)?",
+        allow_origin_regex=LOCAL_ORIGIN_RE.pattern,
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],

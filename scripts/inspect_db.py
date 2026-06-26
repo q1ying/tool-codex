@@ -6,7 +6,14 @@ from pathlib import Path
 import sqlite3
 
 
-DEFAULT_TABLES = ["conversations", "messages", "file_assets", "codex_runs", "events"]
+DEFAULT_TABLES = [
+    "conversations",
+    "messages",
+    "file_assets",
+    "codex_runs",
+    "events",
+    "run_auth_tokens",
+]
 
 
 def main() -> None:
@@ -39,10 +46,13 @@ def _display_row(table: str, row: sqlite3.Row) -> dict:
 
 def _expose_asset_mcp_fields(data: dict) -> None:
     metadata = _json_object(data.get("metadata_json"))
+    command = _json_object(data.get("command_json"))
     asset_mcp = metadata.get("asset_mcp") if isinstance(metadata.get("asset_mcp"), dict) else {}
+    command_asset_mcp = command.get("asset_mcp") if isinstance(command.get("asset_mcp"), dict) else {}
     data["asset_mcp_token"] = asset_mcp.get("token")
     data["asset_mcp_token_env_var"] = asset_mcp.get("token_env_var")
     data["asset_mcp_url"] = asset_mcp.get("url")
+    data["asset_mcp_command_url"] = command_asset_mcp.get("url")
     data["asset_mcp_expires_at"] = asset_mcp.get("expires_at")
 
 
