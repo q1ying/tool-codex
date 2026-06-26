@@ -1,0 +1,46 @@
+services:
+  minio:
+    image: minio/minio
+    container_name: mathpilot-minio
+    ports:
+      - "19000:9000"
+      - "19001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+
+  minio-init:
+    image: minio/mc
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 minioadmin minioadmin123; do sleep 1; done;
+      mc mb --ignore-existing local/mathpilot-dev;
+      "
+
+  api:
+    build:
+      context: .
+      dockerfile: runtime/Dockerfile.worker
+    command: python -m uvicorn gateway.main:app --app-dir apps/api/src --host 0.0.0.0 --port 8010
+    depends_on:
+      - minio-init
+    environment:
+      GATEWAY_DATA_DIR: /app/data
+      DEFAULT_USER_ID: user_default
+      CODEX_EXECUTABLE: codex
+      OBJECT_STORAGE_ENDPOINT: http://minio:9000
+      OBJECT_STORAGE_BUCKET: mathpilot-dev
+      OBJECT_STORAGE_ACCESS_KEY_ID: minioadmin
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: minioadmin123
+    ports:
+      - "8010:8010"
+    volumes:
+      - ./data:/app/data
+
+volumes:
+  minio_data:

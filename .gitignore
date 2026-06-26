@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+data/
+uvicorn.pid
+uvicorn.out.log
+uvicorn.err.log
+
+.env
+

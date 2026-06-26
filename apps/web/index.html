@@ -1,0 +1,969 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codex Workspace Gateway</title>
+    <style>
+      :root {
+        --bg: #f7f7f4;
+        --panel: #ffffff;
+        --text: #1f2328;
+        --muted: #667085;
+        --line: #d9ddd3;
+        --accent: #176b5b;
+        --danger: #a33131;
+        --warn: #946200;
+        --code: #eef1eb;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: Arial, "Microsoft YaHei", sans-serif;
+        font-size: 14px;
+      }
+
+      header {
+        min-height: 60px;
+        padding: 10px 22px;
+        border-bottom: 1px solid var(--line);
+        background: #fbfbf8;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      h1,
+      h2 {
+        margin: 0;
+        letter-spacing: 0;
+      }
+
+      h1 {
+        font-size: 18px;
+      }
+
+      h2 {
+        margin-bottom: 12px;
+        font-size: 15px;
+      }
+
+      main {
+        max-width: 1480px;
+        margin: 0 auto;
+        padding: 18px;
+        display: grid;
+        grid-template-columns: minmax(360px, 460px) 1fr;
+        gap: 16px;
+      }
+
+      section,
+      aside {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 16px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      input,
+      select,
+      textarea,
+      button {
+        font: inherit;
+      }
+
+      input,
+      select,
+      textarea {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 9px 10px;
+        background: #fff;
+        color: var(--text);
+      }
+
+      input[type="checkbox"] {
+        width: auto;
+      }
+
+      textarea {
+        min-height: 150px;
+        resize: vertical;
+      }
+
+      button {
+        border: 1px solid var(--accent);
+        border-radius: 6px;
+        padding: 9px 12px;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        background: #fff;
+        color: var(--accent);
+      }
+
+      button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      a {
+        color: var(--accent);
+      }
+
+      .stack {
+        display: grid;
+        gap: 12px;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+
+      .status {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 3px 8px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        background: #fff;
+        font-size: 12px;
+        word-break: break-all;
+      }
+
+      .pill.ok {
+        border-color: #8fb8aa;
+        background: #edf6f2;
+        color: #0f4e42;
+      }
+
+      .pill.bad {
+        border-color: #d5a2a2;
+        background: #fff1f1;
+        color: var(--danger);
+      }
+
+      .pill.warn {
+        border-color: #dcc27f;
+        background: #fff8e0;
+        color: var(--warn);
+      }
+
+      .health-block {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        margin: 8px 0;
+        padding: 9px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fbfbf8;
+      }
+
+      .health-block.ok {
+        border-color: #8fb8aa;
+        background: #edf6f2;
+      }
+
+      .health-block.bad {
+        border-color: #d5a2a2;
+        background: #fff1f1;
+      }
+
+      .health-block.warn {
+        border-color: #dcc27f;
+        background: #fff8e0;
+      }
+
+      .dot {
+        flex: 0 0 auto;
+        margin-top: 3px;
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: #9aa3a1;
+        display: inline-block;
+      }
+
+      .dot.ok {
+        background: #1f8f62;
+      }
+
+      .dot.warn {
+        background: #d99a16;
+      }
+
+      .dot.bad {
+        background: #c44242;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .list {
+        display: grid;
+        gap: 8px;
+        max-height: 430px;
+        overflow: auto;
+      }
+
+      .item {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px;
+        background: #fff;
+      }
+
+      .item strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+
+      .meta {
+        color: var(--muted);
+        font-size: 12px;
+        word-break: break-all;
+      }
+
+      .branch {
+        margin-top: 8px;
+        padding-left: 10px;
+        border-left: 2px solid var(--line);
+      }
+
+      .branch.output {
+        border-left-color: var(--accent);
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      pre {
+        margin: 0;
+        padding: 12px;
+        max-height: 340px;
+        overflow: auto;
+        border-radius: 6px;
+        background: var(--code);
+      }
+
+      .error {
+        min-height: 20px;
+        color: var(--danger);
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      @media (max-width: 980px) {
+        main,
+        .grid,
+        .row {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Codex Workspace Gateway</h1>
+      <div class="status">
+        <label>
+          API 地址
+          <input id="apiBase" value="http://127.0.0.1:8010" />
+        </label>
+        <span id="healthPill" class="pill">未检查</span>
+        <button id="healthBtn" class="secondary" type="button">检查 API</button>
+      </div>
+    </header>
+
+    <main>
+      <aside class="stack">
+        <section class="stack">
+          <h2>Codex Devices</h2>
+          <div class="status">
+            <span id="devicePill" class="pill">not loaded</span>
+            <button id="devicesRefreshBtn" class="secondary" type="button">Check All Health</button>
+          </div>
+          <div id="devicesList" class="list"></div>
+          <div class="row">
+            <label>
+              Name
+              <input id="deviceName" value="SSH Codex Worker" />
+            </label>
+            <label>
+              Mode
+              <select id="deviceMode">
+                <option value="ssh">ssh</option>
+                <option value="local">local</option>
+              </select>
+            </label>
+          </div>
+          <div id="deviceSshTargetRow" class="row">
+            <label>
+              Host
+              <input id="deviceHost" placeholder="192.168.110.38" />
+            </label>
+            <label>
+              User
+              <input id="deviceUser" placeholder="openclaw" />
+            </label>
+          </div>
+          <div id="deviceSshRootRow" class="row">
+            <label>
+              Port
+              <input id="devicePort" type="number" value="22" />
+            </label>
+            <label>
+              Remote Root
+              <input id="deviceRemoteRoot" value="~/lqy/codex-workspaces" />
+            </label>
+          </div>
+          <label>
+            Codex executable path
+            <input id="deviceCodexExecutable" placeholder="/home/openclaw/.local/bin/codex" />
+          </label>
+          <div id="deviceSshAuthRow" class="row">
+            <label>
+              Auth
+              <select id="deviceAuthMethod">
+                <option value="key">key</option>
+                <option value="password">password</option>
+              </select>
+            </label>
+            <label>
+              Password
+              <input id="devicePassword" type="password" autocomplete="new-password" />
+            </label>
+          </div>
+          <div class="row">
+            <label>
+              Sandbox
+              <select id="deviceSandboxMode">
+                <option value="workspace-write">workspace-write</option>
+                <option value="read-only">read-only</option>
+                <option value="danger-full-access">danger-full-access</option>
+              </select>
+            </label>
+            <label class="check">
+              <input id="deviceDisableExternalMcps" type="checkbox" checked />
+              Disable external MCPs
+            </label>
+          </div>
+          <label>
+            Extra Codex config overrides
+            <textarea id="deviceConfigOverrides" rows="3" placeholder='plugins."linear@openai-curated".enabled=false'></textarea>
+          </label>
+          <button id="deviceCreateBtn" type="button">Add Device</button>
+        </section>
+
+        <section class="stack">
+          <h2>上传到资产库</h2>
+          <label>
+            文件
+            <input id="assetFileInput" type="file" multiple />
+          </label>
+          <label>
+            类型
+            <select id="assetKind">
+              <option value="material">材料</option>
+              <option value="guidance">规范 / SOP / skill</option>
+            </select>
+          </label>
+          <button id="assetUploadBtn" class="secondary" type="button">上传保存</button>
+        </section>
+
+        <section class="stack">
+          <h2>提交任务</h2>
+          <label>
+            标题
+            <input id="title" value="测试" />
+          </label>
+          <label>
+            本次聊天附件
+            <input id="fileInput" type="file" multiple />
+          </label>
+          <label>
+            请求
+            <textarea id="instruction">不用管上传的问题，只输出”我是codex“</textarea>
+          </label>
+          <button id="submitBtn" type="button">上传并运行</button>
+          <button id="refreshBtn" class="secondary" type="button">刷新当前会话</button>
+          <div id="error" class="error"></div>
+        </section>
+      </aside>
+
+      <div class="stack">
+        <section class="stack">
+          <h2>当前 Conversation</h2>
+          <div class="status">
+            <span id="conversationId" class="pill">无会话</span>
+            <span id="conversationStatus" class="pill">status: -</span>
+            <span id="workspaceId" class="pill">workspace: -</span>
+          </div>
+          <pre id="conversationJson">{}</pre>
+        </section>
+
+        <section class="stack">
+          <h2>Codex 回复</h2>
+          <div id="assistantMessages" class="list"></div>
+        </section>
+
+        <section class="grid">
+          <div>
+            <h2>工作区文件</h2>
+            <div id="branchesList" class="list"></div>
+          </div>
+          <div>
+            <h2>Runs</h2>
+            <div id="runsList" class="list"></div>
+          </div>
+          <div>
+            <h2>运行日志</h2>
+            <div id="eventsList" class="list"></div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      const state = {
+        conversationId: localStorage.getItem("gatewayConversationId") || "",
+        pollTimer: null,
+      };
+
+      const $ = (id) => document.getElementById(id);
+
+      function apiBase() {
+        return $("apiBase").value.replace(/\/+$/, "");
+      }
+
+      async function request(path, options = {}) {
+        const response = await fetch(`${apiBase()}${path}`, options);
+        const text = await response.text();
+        const data = text ? JSON.parse(text) : {};
+        if (!response.ok) {
+          throw new Error(data.detail || response.statusText);
+        }
+        return data;
+      }
+
+      function setError(error) {
+        $("error").textContent = error ? String(error.message || error) : "";
+      }
+
+      function setBusy(busy) {
+        for (const id of ["submitBtn", "refreshBtn", "healthBtn", "devicesRefreshBtn", "deviceCreateBtn", "assetUploadBtn"]) {
+          $(id).disabled = busy;
+        }
+        document.querySelectorAll(".device-cleanup-btn, .device-delete-btn").forEach((button) => {
+          button.disabled = busy;
+        });
+      }
+
+      async function ensureConversation() {
+        if (state.conversationId) return state.conversationId;
+        const current = await request("/api/conversations/current");
+        if (current.conversation?.conversation_id) {
+          state.conversationId = current.conversation.conversation_id;
+          localStorage.setItem("gatewayConversationId", state.conversationId);
+          renderConversation(current.conversation);
+          return state.conversationId;
+        }
+        const created = await request("/api/conversations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "资产库上传",
+            user_request: "",
+          }),
+        });
+        state.conversationId = created.conversation_id;
+        localStorage.setItem("gatewayConversationId", state.conversationId);
+        renderConversation(created);
+        return state.conversationId;
+      }
+
+      async function uploadAssetFiles() {
+        const files = Array.from($("assetFileInput").files || []);
+        if (!files.length) {
+          setError("请选择要上传的文件。");
+          return;
+        }
+        setBusy(true);
+        setError("");
+        try {
+          const conversationId = await ensureConversation();
+          for (const file of files) {
+            const form = new FormData();
+            form.append("kind", $("assetKind").value);
+            form.append("description", "");
+            form.append("file", file);
+            await request(`/api/conversations/${conversationId}/files`, {
+              method: "POST",
+              body: form,
+            });
+          }
+          $("assetFileInput").value = "";
+          await refreshAll();
+          startPolling();
+        } catch (error) {
+          setError(error);
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function checkHealth() {
+        try {
+          const data = await request("/api/health");
+          $("healthPill").textContent = data.status === "ok" ? "API 正常" : "API 异常";
+          $("healthPill").className = data.status === "ok" ? "pill ok" : "pill bad";
+        } catch (error) {
+          $("healthPill").textContent = "API 未连接";
+          $("healthPill").className = "pill bad";
+          setError(error);
+        }
+      }
+
+      async function submitAndRun() {
+        const instruction = $("instruction").value.trim();
+        if (!instruction) {
+          setError("请输入请求。");
+          return;
+        }
+        setBusy(true);
+        setError("");
+        try {
+          const conversationId = await ensureConversation();
+          const form = new FormData();
+          form.append("conversation_id", conversationId);
+          form.append("title", $("title").value);
+          form.append("user_instruction", instruction);
+          for (const file of $("fileInput").files) {
+            form.append("files", file);
+          }
+          const data = await request("/api/conversations/run", {
+            method: "POST",
+            body: form,
+          });
+          state.conversationId = data.conversation.conversation_id;
+          localStorage.setItem("gatewayConversationId", state.conversationId);
+          renderConversation(data.conversation);
+          await refreshAll();
+          startPolling();
+        } catch (error) {
+          setError(error);
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function loadDevices() {
+        try {
+          const data = await request("/api/devices");
+          renderDevices(data.items || []);
+        } catch (error) {
+          $("devicePill").textContent = "load failed";
+          $("devicePill").className = "pill bad";
+          setError(error);
+        }
+      }
+
+      async function checkAllDevices() {
+        setBusy(true);
+        setError("");
+        try {
+          const data = await request("/api/devices");
+          const items = data.items || [];
+          if (!items.length) {
+            renderDevices([]);
+            return;
+          }
+          $("devicePill").textContent = `checking ${items.length} device(s)`;
+          $("devicePill").className = "pill warn";
+          await Promise.allSettled(
+            items.map((item) =>
+              request(`/api/devices/${encodeURIComponent(item.device_id)}/health-check`, { method: "POST" })
+            )
+          );
+          await loadDevices();
+        } catch (error) {
+          $("devicePill").textContent = "health check failed";
+          $("devicePill").className = "pill bad";
+          setError(error);
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      function syncDeviceModeFields() {
+        const isLocal = $("deviceMode").value === "local";
+        for (const id of ["deviceSshTargetRow", "deviceSshRootRow", "deviceSshAuthRow"]) {
+          $(id).classList.toggle("hidden", isLocal);
+        }
+        for (const id of ["deviceHost", "deviceUser", "devicePort", "deviceRemoteRoot", "deviceAuthMethod", "devicePassword"]) {
+          $(id).disabled = isLocal;
+        }
+        if (isLocal) {
+          $("deviceHost").value = "";
+          $("deviceUser").value = "";
+          $("devicePort").value = "";
+          $("deviceRemoteRoot").value = "";
+          $("deviceAuthMethod").value = "key";
+          $("devicePassword").value = "";
+        } else {
+          $("devicePort").value = $("devicePort").value || "22";
+          $("deviceRemoteRoot").value = $("deviceRemoteRoot").value || "~/lqy/codex-workspaces";
+        }
+      }
+
+      async function createDevice() {
+        setBusy(true);
+        setError("");
+        try {
+          const mode = $("deviceMode").value;
+          const payload = {
+            name: $("deviceName").value.trim() || "Codex Device",
+            runner_mode: mode,
+            host: mode === "ssh" ? $("deviceHost").value.trim() : "",
+            user: mode === "ssh" ? $("deviceUser").value.trim() : "",
+            port: mode === "ssh" ? Number($("devicePort").value || 22) : 22,
+            remote_root: mode === "ssh" ? $("deviceRemoteRoot").value.trim() || "~/lqy/codex-workspaces" : "",
+            codex_executable: mode === "ssh" ? $("deviceCodexExecutable").value.trim() : "",
+            local_executable: mode === "local" ? $("deviceCodexExecutable").value.trim() : "",
+            ssh_auth_method: mode === "ssh" ? $("deviceAuthMethod").value : "key",
+            ssh_password: mode === "ssh" ? $("devicePassword").value : "",
+            sandbox_mode: $("deviceSandboxMode").value,
+            disable_external_mcps: $("deviceDisableExternalMcps").checked,
+            config_overrides: $("deviceConfigOverrides").value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+          };
+          await request("/api/devices", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          $("devicePassword").value = "";
+          $("deviceConfigOverrides").value = "";
+          await checkAllDevices();
+        } catch (error) {
+          setError(error);
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function deleteDevice(deviceId) {
+        if (!confirm(`Delete device ${deviceId}?`)) return;
+        setBusy(true);
+        setError("");
+        try {
+          await request(`/api/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
+          await checkAllDevices();
+        } catch (error) {
+          setError(error);
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function cleanupRemoteSessions(deviceId) {
+        if (!confirm(`Clean remote session workspaces older than 60 minutes on ${deviceId}?`)) return;
+        setBusy(true);
+        setError("");
+        try {
+          const result = await request(`/api/devices/${encodeURIComponent(deviceId)}/remote-sessions/cleanup`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ older_than_minutes: 60 }),
+          });
+          $("devicePill").textContent = `cleaned ${result.deleted_count || 0} remote session(s)`;
+          $("devicePill").className = result.status === "ok" ? "pill ok" : "pill bad";
+          if (result.status !== "ok") {
+            setError(result.stderr || result.message || "Remote cleanup failed.");
+          }
+          await loadDevices();
+        } catch (error) {
+          setError(error);
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      function deviceHealthClass(status) {
+        if (status === "ok") return "ok";
+        if (status === "failed") return "bad";
+        return "warn";
+      }
+
+      function deviceHealthLabel(status) {
+        if (status === "ok") return "Healthy";
+        if (status === "failed") return "Unhealthy";
+        return "Unchecked";
+      }
+
+      function renderDevices(items) {
+        const failedCount = items.filter((item) => item.last_check_status === "failed").length;
+        const uncheckedCount = items.filter((item) => !item.last_check_status).length;
+        if (!items.length) {
+          $("devicePill").textContent = "0 device(s)";
+          $("devicePill").className = "pill warn";
+        } else if (failedCount) {
+          $("devicePill").textContent = `${failedCount}/${items.length} unhealthy`;
+          $("devicePill").className = "pill bad";
+        } else if (uncheckedCount) {
+          $("devicePill").textContent = `${items.length} device(s), ${uncheckedCount} unchecked`;
+          $("devicePill").className = "pill warn";
+        } else {
+          $("devicePill").textContent = `${items.length} healthy device(s)`;
+          $("devicePill").className = "pill ok";
+        }
+        $("devicesList").innerHTML = items.length ? items.map((item) => `
+          <div class="item">
+            <strong>${escapeHtml(item.name)} <span class="meta">${escapeHtml(item.device_id)}</span></strong>
+            <div class="health-block ${deviceHealthClass(item.last_check_status)}">
+              <span class="dot ${deviceHealthClass(item.last_check_status)}"></span>
+              <div>
+                <strong>${deviceHealthLabel(item.last_check_status)}</strong>
+                <div class="meta">${escapeHtml(item.last_check_message || "No health check result yet.")}</div>
+                <div class="meta">last checked: ${escapeHtml(item.last_check_at || "-")}</div>
+              </div>
+            </div>
+            <div class="meta">mode: ${escapeHtml(item.runner_mode)} · status: ${escapeHtml(item.status)}</div>
+            <div class="meta">sandbox: ${escapeHtml(item.sandbox_mode || "workspace-write")} · external MCPs: ${item.disable_external_mcps ? "disabled" : "enabled"}</div>
+            <div class="meta">config overrides: ${escapeHtml((item.config_overrides || []).join("; ") || "-")}</div>
+            <div class="meta">codex: ${escapeHtml(item.runner_mode === "ssh" ? (item.codex_executable || "-") : (item.local_executable || "-"))}</div>
+            <div class="meta">${escapeHtml(item.user || "-")}@${escapeHtml(item.host || "local")} : ${escapeHtml(item.port || "-")}</div>
+            <div class="meta">root: ${escapeHtml(item.remote_root || "-")} · auth: ${escapeHtml(item.ssh_auth_method || "-")}${item.has_ssh_password ? " · password saved" : ""}</div>
+            <div class="actions">
+              ${item.runner_mode === "ssh" ? `<button class="secondary device-cleanup-btn" type="button" data-device-id="${escapeHtml(item.device_id)}">Clean Remote Sessions</button>` : ""}
+              <button class="secondary device-delete-btn" type="button" data-device-id="${escapeHtml(item.device_id)}">Delete</button>
+            </div>
+          </div>
+        `).join("") : `<div class="meta">No devices yet.</div>`;
+      }
+
+      async function refreshAll() {
+        if (!state.conversationId) return;
+        const [conversation, branches, runs, events] = await Promise.all([
+          request(`/api/conversations/${state.conversationId}`),
+          request(`/api/conversations/${state.conversationId}/file-branches`),
+          request(`/api/conversations/${state.conversationId}/runs`),
+          request(`/api/conversations/${state.conversationId}/events`),
+        ]);
+        renderConversation(conversation);
+        renderAssistantMessages(conversation.messages || []);
+        renderBranches(branches.items || []);
+        renderRuns(runs.items || []);
+        renderEvents(events.items || []);
+      }
+
+      function startPolling() {
+        if (state.pollTimer) clearInterval(state.pollTimer);
+        state.pollTimer = setInterval(() => refreshAll().catch(setError), 2500);
+      }
+
+      function renderConversation(data) {
+        $("conversationId").textContent = data.conversation_id || "无会话";
+        $("conversationStatus").textContent = `status: ${data.status || "-"}`;
+        $("conversationStatus").className = data.status === "completed" ? "pill ok" : data.status === "failed" ? "pill bad" : "pill";
+        $("workspaceId").textContent = `workspace: ${data.workspace_id || "-"}`;
+        $("conversationJson").textContent = JSON.stringify(data, null, 2);
+      }
+
+      function renderBranches(items) {
+        $("branchesList").innerHTML = items.length ? items.map((group) => `
+          <div class="item">
+            <strong>${escapeHtml(group.branch_key || group.original_filename)}</strong>
+            <div class="meta">分支数量：${group.stored_count}</div>
+            ${group.branches.map((branch) => `
+              <div class="branch ${branch.is_generated_output ? "output" : ""}">
+                <div class="meta">#${escapeHtml(branch.branch_index)} · ${escapeHtml(branch.kind)} · ${formatBytes(branch.size_bytes)}</div>
+                <div>${escapeHtml(branch.actual_filename || branch.relative_path)}</div>
+                <div class="meta">${escapeHtml(branch.relative_path)}</div>
+                ${branch.generated_from_file_ids?.length ? `<div class="meta">来源文件：${branch.generated_from_file_ids.map(escapeHtml).join(", ")}</div>` : ""}
+                ${branch.source_run_id ? `<div class="meta">来源 run：${escapeHtml(branch.source_run_id)}</div>` : ""}
+                <div class="meta">${escapeHtml(shortHash(branch.sha256))}</div>
+                <div class="meta">
+                  <a href="${apiBase()}/api/conversations/files/${encodeURIComponent(branch.file_id)}/download" target="_blank" rel="noreferrer">下载</a>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        `).join("") : `<div class="meta">当前工作区还没有文件。</div>`;
+      }
+
+      function renderAssistantMessages(messages) {
+        const assistant = messages.filter((message) => message.role === "assistant");
+        $("assistantMessages").innerHTML = assistant.length ? assistant.slice().reverse().map((message) => `
+          <div class="item">
+            <strong>${escapeHtml(message.created_at || "")}</strong>
+            <div>${escapeHtml(message.content || "")}</div>
+          </div>
+        `).join("") : `<div class="meta">Codex 还没有最终回复。运行中可以先看右侧运行日志和 Runs 状态灯。</div>`;
+      }
+
+      function renderRuns(items) {
+        $("runsList").innerHTML = items.length ? items.slice().reverse().map((item) => {
+          const state = heartbeatState(item);
+          return `
+            <div class="item">
+              <strong><span class="dot ${state.className}"></span> ${escapeHtml(item.run_id)}</strong>
+              <div class="meta">status: ${escapeHtml(item.status)} · ${state.label}</div>
+              <div class="meta">heartbeat: ${escapeHtml(item.runtime?.last_heartbeat_at || "-")}</div>
+              <div class="meta">elapsed: ${item.runtime?.elapsed_seconds ?? 0}s · no output: ${item.runtime?.seconds_since_last_output ?? "-"}s</div>
+              <div class="meta">exit: ${item.exit_code ?? "-"}</div>
+              <div class="meta">${escapeHtml(item.error_message || "")}</div>
+            </div>
+          `;
+        }).join("") : `<div class="meta">还没有 run。</div>`;
+      }
+
+      function heartbeatState(run) {
+        if (run.status === "completed") {
+          return { className: "ok", label: "已完成" };
+        }
+        if (run.status === "failed" || run.status === "timeout") {
+          return { className: "bad", label: "已停止" };
+        }
+        if (!run.runtime || !run.runtime.last_heartbeat_at) {
+          return { className: run.status === "running" ? "warn" : "", label: "等待心跳" };
+        }
+        if (run.runtime.alive) {
+          const quiet = Number(run.runtime.seconds_since_last_output ?? 0);
+          return { className: quiet > 30 ? "warn" : "ok", label: quiet > 30 ? "运行中，暂无新输出" : "运行中" };
+        }
+        return { className: "", label: "未运行" };
+      }
+
+      function renderEvents(items) {
+        const visible = items.filter((item) => {
+          if (item.type === "codex_running" || item.type === "remote_codex_running") return false;
+          if (item.type === "codex_stderr" && item.level === "info") return false;
+          return true;
+        });
+        $("eventsList").innerHTML = visible.length ? visible.slice().reverse().map((item) => `
+          <div class="item">
+            <strong>${escapeHtml(item.type)}</strong>
+            <div class="meta">${escapeHtml(item.created_at)} · ${escapeHtml(item.level)}</div>
+            <div>${escapeHtml(item.message)}</div>
+            ${renderEventPayload(item)}
+          </div>
+        `).join("") : `<div class="meta">还没有关键事件。</div>`;
+      }
+
+      function renderEventPayload(item) {
+        const payload = item.payload || {};
+        const raw = payload.raw || {};
+        const preview = payload.line || raw.message || raw.type || raw.event || raw.kind || "";
+        if (!preview) return "";
+        return `<div class="meta">${escapeHtml(String(preview).slice(0, 500))}</div>`;
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function formatBytes(bytes) {
+        if (!bytes) return "0 B";
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+      }
+
+      function shortHash(hash) {
+        return hash ? `sha256:${String(hash).slice(0, 12)}` : "";
+      }
+
+      $("healthBtn").addEventListener("click", checkHealth);
+      $("devicesRefreshBtn").addEventListener("click", () => checkAllDevices().catch(setError));
+      $("devicesList").addEventListener("click", (event) => {
+        const cleanupButton = event.target.closest(".device-cleanup-btn");
+        if (cleanupButton) {
+          cleanupRemoteSessions(cleanupButton.dataset.deviceId);
+          return;
+        }
+        const button = event.target.closest(".device-delete-btn");
+        if (!button) return;
+        deleteDevice(button.dataset.deviceId);
+      });
+      $("deviceCreateBtn").addEventListener("click", createDevice);
+      $("deviceMode").addEventListener("change", syncDeviceModeFields);
+      $("assetUploadBtn").addEventListener("click", uploadAssetFiles);
+      $("submitBtn").addEventListener("click", submitAndRun);
+      $("refreshBtn").addEventListener("click", () => refreshAll().catch(setError));
+
+      syncDeviceModeFields();
+      checkHealth();
+      checkAllDevices();
+
+      async function loadCurrentConversation() {
+        if (state.conversationId) {
+          await refreshAll();
+          startPolling();
+          return;
+        }
+        const data = await request("/api/conversations/current");
+        if (data.conversation) {
+          state.conversationId = data.conversation.conversation_id;
+          localStorage.setItem("gatewayConversationId", state.conversationId);
+          renderConversation(data.conversation);
+          await refreshAll();
+          startPolling();
+        }
+      }
+
+      if (state.conversationId) {
+        refreshAll().then(startPolling).catch(() => {
+          localStorage.removeItem("gatewayConversationId");
+          state.conversationId = "";
+          loadCurrentConversation().catch(() => {});
+        });
+      } else {
+        loadCurrentConversation().catch(() => {});
+      }
+    </script>
+  </body>
+</html>
